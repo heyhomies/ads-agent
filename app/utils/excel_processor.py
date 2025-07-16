@@ -65,7 +65,7 @@ def process_amazon_report(file_path):
         # --- Load Campaign Sheet (Primary for Changes) ---
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", message="Workbook contains no default style")
-            df_campaign_raw = pd.read_excel(file_path, sheet_name=original_campaign_sheet_name)
+        df_campaign_raw = pd.read_excel(file_path, sheet_name=original_campaign_sheet_name)
         raw_campaign_columns = list(df_campaign_raw.columns)
         
         # Define mappings for campaign sheet (where changes will be made)
@@ -107,7 +107,7 @@ def process_amazon_report(file_path):
         if original_search_terms_sheet_name:
             with warnings.catch_warnings():
                 warnings.filterwarnings("ignore", message="Workbook contains no default style")
-                df_search_terms_raw = pd.read_excel(file_path, sheet_name=original_search_terms_sheet_name)
+            df_search_terms_raw = pd.read_excel(file_path, sheet_name=original_search_terms_sheet_name)
             df_search_terms_processed = df_search_terms_raw.copy()
             df_search_terms_processed.columns = [col.lower().strip().replace(' ', '_') for col in df_search_terms_processed.columns]
             

@@ -57,10 +57,10 @@ def render_dashboard(optimization_results: Dict[str, Any]):
         "Gebotsanpassungen",
         "Platzierungs­anpassungen"
     ])
-
+    
     with tab_kw:
         render_keyword_changes_tab(optimization_results.get('keyword_performance', []))
-
+    
     with tab_bid:
         render_bid_changes_tab(bid_changes)
     
@@ -192,7 +192,7 @@ def render_keyword_changes_tab(keyword_perf):
     min_conversion_rate = client_config.get('min_conversion_rate', 10.0)
     
     st.info(f"📊 **Aktuelle Filter:** Target ACOS ≤ {target_acos}% UND Conversion Rate ≥ {min_conversion_rate}% = 'gut'")
-
+    
     if not keyword_perf:
         st.info("Keine Keyword-Daten verfügbar")
         return
@@ -399,7 +399,7 @@ def render_bid_changes_tab(bid_changes):
                             'sales':'Verkäufe',
                             'conversion_rate':'CR %',
                             'acos_pct':'ACOS %'
-                        })
+        })
                         if 'CR %' in df_worst_disp.columns:
                             df_worst_disp['CR %'] = df_worst_disp['CR %'].apply(lambda x: round(x*100,2) if not pd.isna(x) else pd.NA)
                         st.dataframe(df_worst_disp, use_container_width=True)
@@ -471,6 +471,10 @@ def render_placement_adjustments_tab(initial_adjustments):
             st.markdown(f"### Kampagne **{campaign_id}**")
 
             total_row = grp[grp['is_total'] == True].iloc[0] if not grp[grp['is_total'] == True].empty else None
+
+            # Check if this is a zero sales campaign and show warning
+            if total_row is not None and total_row.get('is_zero_sales', False):
+                st.warning("⚠️ **Hinweis**: Diese Kampagne hat 0€ Umsatz. Der Basis-CPC wurde auf das Mindestgebot von 0,01€ gesetzt.")
 
             # Display comprehensive metrics using HTML cards
             if total_row is not None and 'total_rpc' in total_row:

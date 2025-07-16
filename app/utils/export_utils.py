@@ -11,10 +11,10 @@ def generate_export_excel(original_excel_path: str,
                           all_original_sheet_names: list = None,
                           placement_changes: list = None):
     """
-    Generates an Excel file in memory with placement adjustments only.
+    Generates an Excel file in memory with placement adjustments and Base CPC updates.
     
     NOTE: Keyword bid updates have been disabled per user request.
-    Only placement (Platzierung) adjustments will be applied to the exported file.
+    Only placement (Platzierung) adjustments and Base CPC updates will be applied to the exported file.
 
     Args:
         original_excel_path (str): Path to the originally uploaded Excel file.
@@ -27,7 +27,7 @@ def generate_export_excel(original_excel_path: str,
         placement_changes (list, optional): List of placement adjustment changes to apply.
 
     Returns:
-        BytesIO: Buffer containing the new Excel file with placement adjustments only, or None on failure.
+        BytesIO: Buffer containing the new Excel file with placement adjustments and Base CPC updates, or None on failure.
     """
     if not original_excel_path:
         st.error("Export Error: Original Excel file path is missing.")
@@ -91,11 +91,12 @@ def generate_export_excel(original_excel_path: str,
 
         updated_keywords_count = 0
         updated_placements_count = 0
+        updated_base_cpc_count = 0
         
         # --- KEYWORD BID UPDATES DISABLED ---
         # Keyword bid updates have been disabled per user request.
-        # Only placement adjustments will be included in the export.
-        st.info("ℹ️ Keyword bid updates are disabled. Only placement adjustments will be exported.")
+        # Only placement adjustments and Base CPC updates will be included in the export.
+        st.info("ℹ️ Keyword bid updates are disabled. Only placement adjustments and Base CPC updates will be exported.")
         
         # ------------------- Apply placement changes ----------------------------
         if placement_changes:
@@ -104,7 +105,7 @@ def generate_export_excel(original_excel_path: str,
                     camp_id = pl_change.get('campaign_id')
                     placement_label = pl_change.get('placement')
                     new_pct = pl_change.get('recommended_adjust_pct')
-
+            
                     try:
                         new_pct_val = float(new_pct)
                     except (ValueError, TypeError):
@@ -117,7 +118,7 @@ def generate_export_excel(original_excel_path: str,
                         entity_col = 'Entity'
                     else:
                         entity_col = None
-                    
+
                     if entity_col:
                         mask_pl = (
                             (df_to_update['Kampagnen-ID'] == camp_id) &
@@ -137,15 +138,109 @@ def generate_export_excel(original_excel_path: str,
                         df_to_update.loc[idxs, 'Operation'] = 'Update'
                         updated_placements_count += len(idxs)
 
-            # else: silently ignore if columns missing
+        # ------------------- Apply Base CPC updates ----------------------------
+        # Update Base CPC for keyword and product targeting rows based on campaign placement adjustments
+        if placement_changes:
+            # Create a mapping of campaign_id to base_cpc from placement changes
+            # Use the campaign-level base_cpc_total from totals rows, not individual placement base_cpc
+            campaign_base_cpc = {}
+            for pl_change in placement_changes:
+                camp_id = pl_change.get('campaign_id')
+                is_total = pl_change.get('is_total', False)
+                
+                # Only use the campaign-level totals row for base_cpc
+                if is_total and camp_id:
+                    base_cpc_total = pl_change.get('base_cpc_total')
+                    if base_cpc_total is not None:
+                        campaign_base_cpc[camp_id] = base_cpc_total
+            
+            # Check for required columns
+            entity_col = None
+            if 'Entität' in df_to_update.columns:
+                entity_col = 'Entität'
+            elif 'Entity' in df_to_update.columns:
+                entity_col = 'Entity'
+            
+            targeting_col = None
+            if 'Targeting-Typ' in df_to_update.columns:
+                targeting_col = 'Targeting-Typ'
+            elif 'Targeting-Type' in df_to_update.columns:
+                targeting_col = 'Targeting-Type'
+            elif 'Targeting Type' in df_to_update.columns:
+                targeting_col = 'Targeting Type'
+            
+            bid_cols_to_update = []
+            if 'Gebot' in df_to_update.columns:
+                bid_cols_to_update.append('Gebot')
+            if 'Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)' in df_to_update.columns:
+                bid_cols_to_update.append('Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)')
+            
+            if entity_col and targeting_col and bid_cols_to_update and campaign_base_cpc:
+                for camp_id, base_cpc_val in campaign_base_cpc.items():
+                    try:
+                        base_cpc_numeric = float(base_cpc_val)
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    # Get campaign targeting type for this campaign
+                    campaign_rows = df_to_update[df_to_update['Kampagnen-ID'] == camp_id]
+                    if campaign_rows.empty:
+                        continue
+                    
+                    # Get targeting type from any row in this campaign (should be consistent)
+                    targeting_type = campaign_rows[targeting_col].iloc[0] if not campaign_rows[targeting_col].empty else None
+                    
+                    if pd.isna(targeting_type):
+                        continue
+                    
+                    targeting_type_str = str(targeting_type).lower().strip()
+                    
+                    # Determine target entity based on targeting type
+                    target_entity = None
+                    if 'automatisch' in targeting_type_str or 'auto' in targeting_type_str:
+                        target_entity = 'produkt-targeting'
+                    elif 'manuell' in targeting_type_str or 'manual' in targeting_type_str:
+                        target_entity = 'keyword'
+                    
+                    if target_entity:
+                        # Find rows to update
+                        mask_base_cpc = (
+                            (df_to_update['Kampagnen-ID'] == camp_id) &
+                            (df_to_update[entity_col].astype(str).str.lower() == target_entity)
+                        )
+                        
+                        idxs = df_to_update[mask_base_cpc].index
+                        
+                        if not idxs.empty:
+                            # Update bid columns with 2 decimal places
+                            base_cpc_rounded = round(base_cpc_numeric, 2)
+                            for bid_col in bid_cols_to_update:
+                                df_to_update.loc[idxs, bid_col] = base_cpc_rounded
+                            df_to_update.loc[idxs, 'Operation'] = 'Update'
+                            updated_base_cpc_count += len(idxs)
+            
+            elif not entity_col:
+                st.warning("⚠️ No Entity column found. Base CPC updates skipped.")
+            elif not targeting_col:
+                st.warning("⚠️ No Targeting Type column found. Base CPC updates skipped.")
+            elif not bid_cols_to_update:
+                st.warning("⚠️ No bid columns ('Gebot' or 'Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)') found. Base CPC updates skipped.")
+            elif not campaign_base_cpc:
+                st.warning("⚠️ No Base CPC values found in placement changes. Base CPC updates skipped.")
 
         sheets_data[campaign_sheet_name] = df_to_update
 
         # Show export summary
+        messages = []
         if updated_placements_count > 0:
-            st.success(f"✅ Export erfolgreich: {updated_placements_count} Platzierungs-Anpassungen wurden aktualisiert.")
+            messages.append(f"{updated_placements_count} Platzierungs-Anpassungen")
+        if updated_base_cpc_count > 0:
+            messages.append(f"{updated_base_cpc_count} Basis-CPC Aktualisierungen")
+        
+        if messages:
+            st.success(f"✅ Export erfolgreich: {', '.join(messages)} wurden aktualisiert.")
         else:
-            st.warning("⚠️ Keine Platzierungs-Anpassungen gefunden oder angewendet.")
+            st.warning("⚠️ Keine Änderungen gefunden oder angewendet.")
 
         output_buffer = BytesIO()
         with pd.ExcelWriter(output_buffer, engine='openpyxl') as writer:

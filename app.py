@@ -185,6 +185,22 @@ def main():
                     st.error("Export nicht möglich: Original-Schlüsselwort oder Gebots-Spalten-Namen wurden während des Uploads nicht korrekt identifiziert. Bitte laden Sie erneut hoch.")
                 else:
                     with st.spinner("Export-Datei generieren..."):
+                        # Recalculate placement adjustments using current slider value from dashboard
+                        current_target_acos = None
+                        if 'placement_target_acos_slider' in st.session_state:
+                            current_target_acos = st.session_state.placement_target_acos_slider / 100
+                        else:
+                            # Fallback to client config if slider not used yet
+                            client_config = st.session_state.get('client_config', {})
+                            current_target_acos = float(client_config.get('target_acos', 20.0)) / 100
+                        
+                        # Recalculate placement adjustments with current target ACOS
+                        from app.utils.placement_adjuster import compute_placement_adjustments
+                        current_placement_adjustments = compute_placement_adjustments(
+                            st.session_state.df_campaign,
+                            target_acos=current_target_acos
+                        )
+                        
                         export_file_bytes = generate_export_excel(
                             original_excel_path=st.session_state.temp_upload_filepath,
                             bid_changes=st.session_state.optimization_results.get('bid_changes', []),
@@ -193,7 +209,7 @@ def main():
                             bid_update_col_original_name=st.session_state.identified_original_bid_target_column,
                             campaign_sheet_name=st.session_state.original_campaign_sheet_name,
                             all_original_sheet_names=st.session_state.all_original_sheet_names,
-                            placement_changes=st.session_state.optimization_results.get('placement_adjustments', [])
+                            placement_changes=current_placement_adjustments  # Use recalculated values
                         )
                         if export_file_bytes:
                             st.session_state.export_file_bytes = export_file_bytes

@@ -59,7 +59,14 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
         if valid_rpc.empty:
             continue  # Skip campaign if no valid RPCs
         min_rpc = valid_rpc.min()
+        
+        # Base CPC calculation with minimum of 0.01 for zero sales campaigns
         base_cpc = min_rpc * target_acos  # Basis CPC
+        if base_cpc == 0.0 or min_rpc == 0.0:
+            base_cpc = 0.01  # Set minimum bid of 0.01 Euro for campaigns with no sales
+            is_zero_sales_campaign = True
+        else:
+            is_zero_sales_campaign = False
 
         for _, row in grp.iterrows():
             placement_label = row['platzierung']
@@ -90,7 +97,8 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 'clicks': row['clicks'],
                 'spend': row['spend'],
                 'sales': row['sales'],
-                'is_total': False
+                'is_total': False,
+                'is_zero_sales': is_zero_sales_campaign
             })
 
         # --- Totals row per campaign ---
@@ -100,8 +108,11 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
         total_acos = (total_spend / total_sales * 100) if total_sales else None
         total_rpc = (total_sales / total_clicks) if total_clicks else None
         target_cpc_campaign = (total_rpc * target_acos) if total_rpc is not None else None
-        # Basis-CPC = niedrigster RPC (min_rpc) * Target ACOS
+        
+        # Basis-CPC = niedrigster RPC (min_rpc) * Target ACOS, minimum 0.01 Euro
         base_cpc_total = min_rpc * target_acos
+        if base_cpc_total == 0.0 or min_rpc == 0.0:
+            base_cpc_total = 0.01  # Set minimum bid of 0.01 Euro
 
         recommendations.append({
             'campaign_id': campaign_id,
@@ -120,7 +131,8 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
             'target_cpc': round(target_cpc_campaign, 4) if target_cpc_campaign is not None else None,
             'base_cpc_total': round(base_cpc_total, 4),
             'min_rpc_total': round(min_rpc, 4),
-            'is_total': True
+            'is_total': True,
+            'is_zero_sales': is_zero_sales_campaign
         })
 
     return recommendations 
