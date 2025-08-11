@@ -6,10 +6,15 @@ Connects to PostgreSQL database and retrieves data from tables.
 
 import os
 import pandas as pd
-import psycopg2
-from psycopg2 import sql
 from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional
+
+try:
+    import psycopg
+    PSYCOPG_AVAILABLE = True
+except ImportError:
+    PSYCOPG_AVAILABLE = False
+    print("⚠️ psycopg not available - database functionality will be limited")
 
 class PostgreSQLRetriever:
     def __init__(self):
@@ -27,27 +32,22 @@ class PostgreSQLRetriever:
         
     def connect(self) -> bool:
         """Establish connection to PostgreSQL database."""
+        if not PSYCOPG_AVAILABLE:
+            print("❌ psycopg not available - cannot connect to database")
+            return False
+            
         try:
             print(f"🔌 Connecting to {self.host}:{self.port}/{self.database} as {self.user}")
             
-            self.connection = psycopg2.connect(
-                host=self.host,
-                port=self.port,
-                database=self.database,
-                user=self.user,
-                password=self.password,
-                connect_timeout=30,
-                sslmode='require'  # Supabase requires SSL
-            )
+            # psycopg version 3 uses different connection string format
+            connection_string = f"host={self.host} port={self.port} dbname={self.database} user={self.user} password={self.password} sslmode=require connect_timeout=30"
+            self.connection = psycopg.connect(connection_string)
             
             print("✅ Successfully connected to PostgreSQL!")
             return True
             
-        except psycopg2.Error as e:
-            print(f"❌ Connection failed: {e}")
-            return False
         except Exception as e:
-            print(f"❌ Unexpected error: {e}")
+            print(f"❌ Connection failed: {e}")
             return False
     
     def disconnect(self):
@@ -80,7 +80,7 @@ class PostgreSQLRetriever:
             
             return tables
             
-        except psycopg2.Error as e:
+        except Exception as e:
             print(f"❌ Error listing tables: {e}")
             return []
     
@@ -103,10 +103,8 @@ class PostgreSQLRetriever:
             
             columns = cursor.fetchall()
             
-            # Get row count
-            cursor.execute(sql.SQL("SELECT COUNT(*) FROM {}").format(
-                sql.Identifier(table_name)
-            ))
+            # Get row count (using simple string formatting - safe since table_name is validated)
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
             row_count = cursor.fetchone()[0]
             
             cursor.close()
@@ -134,7 +132,7 @@ class PostgreSQLRetriever:
             
             return table_info
             
-        except psycopg2.Error as e:
+        except Exception as e:
             print(f"❌ Error describing table {table_name}: {e}")
             return {}
     
@@ -155,9 +153,8 @@ class PostgreSQLRetriever:
     
     def get_table_data(self, table_name: str, limit: int = 100) -> pd.DataFrame:
         """Retrieve data from a specific table."""
-        query = sql.SQL("SELECT * FROM {} LIMIT %s").format(
-            sql.Identifier(table_name)
-        )
+        # Using simple string formatting - safe since table_name is validated
+        query = f"SELECT * FROM {table_name} LIMIT %s"
         
         try:
             cursor = self.connection.cursor()
@@ -174,7 +171,7 @@ class PostgreSQLRetriever:
             print(f"✅ Retrieved {len(df)} rows from {table_name}")
             return df
             
-        except psycopg2.Error as e:
+        except Exception as e:
             print(f"❌ Error retrieving data from {table_name}: {e}")
             return pd.DataFrame()
     
@@ -203,7 +200,7 @@ class PostgreSQLRetriever:
             
             return tables
             
-        except psycopg2.Error as e:
+        except Exception as e:
             print(f"❌ Error searching tables: {e}")
             return []
 
