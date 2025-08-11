@@ -7,6 +7,13 @@ import warnings
 def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float = 0.20) -> List[Dict]:
     """Compute bid adjustment recommendations for placement rows (Gebotsanpassung) in the campaign sheet.
 
+    For zero-sales placements with clicks, sales are adjusted to 1 Euro for meaningful RPC calculations.
+    If any placement adjustment exceeds 900% (Amazon's maximum), the system automatically scales:
+    - Base CPC is increased by an INTEGER multiplier (calculated as int(max_percentage/900) + 1)
+    - All placement percentages are reduced proportionally (maintaining relative differences)
+    - Maximum percentage is capped at exactly 900%
+    - No percentage goes below 0%
+
     Args:
         df_campaign (pd.DataFrame): The processed campaign dataframe from `process_amazon_report`.
         target_acos (float, optional): Target ACOS as a fraction (e.g. 0.20 for 20%). Defaults to 0.20.
@@ -14,7 +21,7 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
     Returns:
         List[Dict]: Recommendation records with keys
             ['campaign_id', 'placement', 'current_adjust_pct', 'recommended_adjust_pct',
-             'cpc', 'rpc', 'min_rpc', 'base_cpc']
+             'cpc', 'rpc', 'min_rpc', 'base_cpc', 'scaling_applied', 'integer_multiplier']
     """
     # Ensure required columns are present
     required_cols = {'kampagnen-id', 'entität', 'platzierung', 'prozentsatz', 'clicks', 'spend', 'sales'}
@@ -46,8 +53,13 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
     # Calculate CPC (clicks / spend) safeguarding divide-by-zero
     df_place['calc_cpc'] = df_place.apply(lambda r: (r['spend'] / r['clicks']) if r['clicks'] != 0 else 0, axis=1)
 
-    # Calculate RPC (sales / clicks) safeguarding
-    df_place['rpc'] = df_place.apply(lambda r: (r['sales'] / r['clicks']) if r['clicks'] != 0 else float('inf'), axis=1)
+    # For zero sales placements with clicks, set sales to 1 Euro for meaningful calculations
+    df_place['sales_adjusted'] = df_place.apply(
+        lambda r: 1.0 if (r['sales'] == 0 and r['clicks'] > 0) else r['sales'], axis=1
+    )
+    
+    # Calculate RPC (sales / clicks) using adjusted sales
+    df_place['rpc'] = df_place.apply(lambda r: (r['sales_adjusted'] / r['clicks']) if r['clicks'] != 0 else float('inf'), axis=1)
 
     # Results list
     recommendations: List[Dict] = []
@@ -60,20 +72,23 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
             continue  # Skip campaign if no valid RPCs
         min_rpc = valid_rpc.min()
         
-        # Base CPC calculation with minimum of 0.01 for zero sales campaigns
+        # Base CPC calculation using adjusted sales (no minimum needed since we adjust sales to 1 Euro)
         base_cpc = min_rpc * target_acos  # Basis CPC
-        if base_cpc == 0.0 or min_rpc == 0.0:
-            base_cpc = 0.01  # Set minimum bid of 0.01 Euro for campaigns with no sales
-            is_zero_sales_campaign = True
-        else:
-            is_zero_sales_campaign = False
+        # Check if this was originally a zero sales campaign before adjustment
+        original_sales = grp['sales'].sum()
+        is_zero_sales_campaign = (original_sales == 0)
 
+        # First pass: Calculate initial percentages to check for 900% limit
+        placement_recommendations = []
+        max_recommended_pct = 0
+        
         for _, row in grp.iterrows():
             placement_label = row['platzierung']
             current_pct = row['prozentsatz']
             rpc = row['rpc']
-            if pd.isna(rpc) or rpc == float('inf') or min_rpc == 0 or pd.isna(min_rpc):
-                # Cannot compute adjustment when sales is zero or min_rpc is invalid
+            
+            if pd.isna(rpc) or rpc == float('inf') or pd.isna(min_rpc):
+                # Cannot compute adjustment when no clicks or min_rpc is invalid
                 recommended_pct = current_pct  # keep unchanged
             else:
                 # Suppress numpy runtime warnings for this division
@@ -82,37 +97,70 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                     ratio = rpc / min_rpc  # ≥ 1
                 # Amazon interprets 0 % as keine Änderung, 100 % als Verdopplung.
                 # Daher: (ratio − 1) * 100 liefert 0 % bei minimalem RPC und 100 % bei Verdopplung.
-                recommended_pct = round(max(ratio - 1, 0) * 100, 1)
+                # Round to whole numbers for cleaner bid adjustments
+                recommended_pct = round(max(ratio - 1, 0) * 100)
+                max_recommended_pct = max(max_recommended_pct, recommended_pct)
+            
+            placement_recommendations.append({
+                'row': row,
+                'placement_label': placement_label,
+                'current_pct': current_pct,
+                'rpc': rpc,
+                'recommended_pct': recommended_pct,
+                'can_calculate': not (pd.isna(rpc) or rpc == float('inf') or pd.isna(min_rpc))
+            })
+        
+        # Check if scaling is needed (any percentage > 900%)
+        scaling_factor = 1.0
+        integer_multiplier = 1
+        if max_recommended_pct > 900:
+            # Calculate integer multiplier for Base CPC (round up to ensure we stay under 900%)
+            integer_multiplier = int(max_recommended_pct / 900) + 1
+            scaling_factor = 900 / max_recommended_pct
+            # Scale up Base CPC by integer multiplier
+            base_cpc = base_cpc * integer_multiplier
+        
+        # Second pass: Apply scaling and create final recommendations
+        for placement_rec in placement_recommendations:
+            row = placement_rec['row']
+            if placement_rec['can_calculate'] and scaling_factor < 1.0:
+                # Apply scaling - percentage down, Base CPC already scaled up
+                # Round scaled percentages to whole numbers
+                recommended_pct = round(max(placement_rec['recommended_pct'] * scaling_factor, 0))
+            else:
+                recommended_pct = placement_rec['recommended_pct']
 
             recommendations.append({
                 'campaign_id': campaign_id,
-                'placement': placement_label,
-                'current_adjust_pct': current_pct,
+                'placement': placement_rec['placement_label'],
+                'current_adjust_pct': placement_rec['current_pct'],
                 'recommended_adjust_pct': recommended_pct,
                 'cpc': row.get('cpc', row['calc_cpc']),
                 'current_acos': round(row.get('acos', 0) * 100, 2) if 'acos' in row else None,
-                'rpc': round(rpc, 4) if rpc != float('inf') else None,
+                'rpc': round(placement_rec['rpc'], 4) if placement_rec['rpc'] != float('inf') else None,
                 'min_rpc': round(min_rpc, 4),
-                'base_cpc': round(base_cpc, 4),
+                'base_cpc': round(base_cpc, 2),
                 'clicks': row['clicks'],
                 'spend': row['spend'],
                 'sales': row['sales'],
                 'is_total': False,
-                'is_zero_sales': is_zero_sales_campaign
+                'is_zero_sales': is_zero_sales_campaign,
+                'scaling_applied': scaling_factor < 1.0,
+                'scaling_factor': round(scaling_factor, 4) if scaling_factor < 1.0 else None,
+                'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None
             })
 
         # --- Totals row per campaign ---
         total_clicks = grp['clicks'].sum()
         total_spend = grp['spend'].sum()
-        total_sales = grp['sales'].sum()
-        total_acos = (total_spend / total_sales * 100) if total_sales else None
-        total_rpc = (total_sales / total_clicks) if total_clicks else None
+        total_sales_adjusted = grp['sales_adjusted'].sum()
+        total_sales_original = grp['sales'].sum()  # Keep original for display
+        total_acos = (total_spend / total_sales_adjusted * 100) if total_sales_adjusted else None
+        total_rpc = (total_sales_adjusted / total_clicks) if total_clicks else None
         target_cpc_campaign = (total_rpc * target_acos) if total_rpc is not None else None
         
-        # Basis-CPC = niedrigster RPC (min_rpc) * Target ACOS, minimum 0.01 Euro
-        base_cpc_total = min_rpc * target_acos
-        if base_cpc_total == 0.0 or min_rpc == 0.0:
-            base_cpc_total = 0.01  # Set minimum bid of 0.01 Euro
+        # Basis-CPC = niedrigster RPC (min_rpc) * Target ACOS (scaled if needed)
+        base_cpc_total = base_cpc  # Use the already scaled base_cpc
 
         recommendations.append({
             'campaign_id': campaign_id,
@@ -126,13 +174,34 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
             'base_cpc': None,
             'clicks': total_clicks,
             'spend': round(total_spend, 2),
-            'sales': round(total_sales, 2),
+            'sales': round(total_sales_original, 2),
             'total_rpc': round(total_rpc, 4) if total_rpc is not None else None,
-            'target_cpc': round(target_cpc_campaign, 4) if target_cpc_campaign is not None else None,
-            'base_cpc_total': round(base_cpc_total, 4),
+            'target_cpc': round(target_cpc_campaign, 2) if target_cpc_campaign is not None else None,
+            'base_cpc_total': round(base_cpc_total, 2),
             'min_rpc_total': round(min_rpc, 4),
             'is_total': True,
-            'is_zero_sales': is_zero_sales_campaign
+            'is_zero_sales': is_zero_sales_campaign,
+            'scaling_applied': scaling_factor < 1.0,
+            'scaling_factor': round(scaling_factor, 4) if scaling_factor < 1.0 else None,
+            'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None
         })
 
+    # Sort recommendations to ensure consistent order: Top-Platzierung, Platzierung Produktseite, Platzierung Rest der Suche
+    def get_placement_sort_order(rec):
+        """Return sort order for placement (lower numbers = earlier in list)"""
+        placement = rec.get('placement', '').lower()
+        
+        # Define desired order
+        order_map = {
+            'top-platzierung': 1,
+            'platzierung produktseite': 2,
+            'platzierung rest der suche': 3,
+            'gesamt': 4  # Totals always last
+        }
+        
+        return order_map.get(placement, 999)  # Unknown placements go to end
+    
+    # Sort recommendations by campaign_id first, then by placement order
+    recommendations.sort(key=lambda r: (r['campaign_id'], get_placement_sort_order(r)))
+    
     return recommendations 

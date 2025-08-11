@@ -139,6 +139,19 @@ def main():
                                     st.session_state.df_search_terms,
                                     client_config
                                 )
+                                
+                                # Add hypothetical ACOS calculations
+                                from app.utils.hypothetical_acos import add_hypothetical_acos_to_optimization_results
+                                optimization_results = add_hypothetical_acos_to_optimization_results(
+                                    optimization_results, 
+                                    client_config.get('target_acos', 20.0)
+                                )
+                                
+                                # Update session state with enriched data for dashboard access
+                                if 'df_search_terms_with_hypothetical' in optimization_results:
+                                    st.session_state.df_search_terms = optimization_results['df_search_terms_with_hypothetical']
+                                if 'df_campaign_with_hypothetical' in optimization_results:
+                                    st.session_state.df_campaign = optimization_results['df_campaign_with_hypothetical']
                                 # --- NEW: Calculate placement bid adjustments ---
                                 try:
                                     placement_adjustments = compute_placement_adjustments(
@@ -209,7 +222,8 @@ def main():
                             bid_update_col_original_name=st.session_state.identified_original_bid_target_column,
                             campaign_sheet_name=st.session_state.original_campaign_sheet_name,
                             all_original_sheet_names=st.session_state.all_original_sheet_names,
-                            placement_changes=current_placement_adjustments  # Use recalculated values
+                            placement_changes=current_placement_adjustments,  # Use recalculated values
+                            client_config=st.session_state.get('client_config', {})  # Add client config for pausing
                         )
                         if export_file_bytes:
                             st.session_state.export_file_bytes = export_file_bytes

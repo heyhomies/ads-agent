@@ -1,6 +1,7 @@
 import pandas as pd
 from io import BytesIO
 import streamlit as st # For potential logging or error display, though not strictly needed here
+from .campaign_pauser import CampaignPauser
 
 def generate_export_excel(original_excel_path: str,
                           bid_changes: list,
@@ -9,7 +10,8 @@ def generate_export_excel(original_excel_path: str,
                           bid_update_col_original_name: str,
                           campaign_sheet_name: str = None, # Now required: original campaign sheet name
                           all_original_sheet_names: list = None,
-                          placement_changes: list = None):
+                          placement_changes: list = None,
+                          client_config: dict = None):
     """
     Generates an Excel file in memory with placement adjustments and Base CPC updates.
     
@@ -228,6 +230,23 @@ def generate_export_excel(original_excel_path: str,
             elif not campaign_base_cpc:
                 st.warning("⚠️ No Base CPC values found in placement changes. Base CPC updates skipped.")
 
+        # ------------------- Apply Campaign Pausing Logic ----------------------------
+        # Pause keywords and products based on ACOS thresholds
+        paused_keywords_count = 0
+        paused_products_count = 0
+        
+        if client_config:
+            try:
+                st.info("🔍 Checking for keywords and products to pause based on thresholds...")
+                pauser = CampaignPauser()
+                df_to_update, pause_summary = pauser.process_campaign_sheet(df_to_update, client_config)
+                
+                paused_keywords_count = pause_summary.get('keywords_paused', 0)
+                paused_products_count = pause_summary.get('products_paused', 0)
+                
+            except Exception as e:
+                st.warning(f"⚠️ Fehler beim Pausieren von Kampagnen-Elementen: {str(e)}")
+
         sheets_data[campaign_sheet_name] = df_to_update
 
         # Show export summary
@@ -236,6 +255,10 @@ def generate_export_excel(original_excel_path: str,
             messages.append(f"{updated_placements_count} Platzierungs-Anpassungen")
         if updated_base_cpc_count > 0:
             messages.append(f"{updated_base_cpc_count} Basis-CPC Aktualisierungen")
+        if paused_keywords_count > 0:
+            messages.append(f"{paused_keywords_count} Keywords pausiert")
+        if paused_products_count > 0:
+            messages.append(f"{paused_products_count} Produkte pausiert")
         
         if messages:
             st.success(f"✅ Export erfolgreich: {', '.join(messages)} wurden aktualisiert.")

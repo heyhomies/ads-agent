@@ -18,8 +18,21 @@ def render_dashboard(optimization_results: Dict[str, Any]):
     bid_changes = optimization_results.get("bid_changes", [])
     summary = optimization_results.get("summary", {})
     
-    # Create metrics row - Updated to show Bids Increased/Decreased
-    col1, col2, col3, col4 = st.columns(4)
+    # Check for hypothetical ACOS data
+    hypothetical_count = 0
+    # First try to get enriched data from optimization results
+    if 'df_search_terms_with_hypothetical' in optimization_results:
+        df_st = optimization_results['df_search_terms_with_hypothetical']
+        if 'hypothetical_acos_note' in df_st.columns:
+            hypothetical_count = df_st['hypothetical_acos_note'].str.contains('Hypothetischer ACOS', na=False).sum()
+    # Fallback to session state
+    elif 'df_search_terms' in st.session_state and st.session_state.df_search_terms is not None:
+        df_st = st.session_state.df_search_terms
+        if 'hypothetical_acos_note' in df_st.columns:
+            hypothetical_count = df_st['hypothetical_acos_note'].str.contains('Hypothetischer ACOS', na=False).sum()
+    
+    # Create metrics row - Updated to show Bids Increased/Decreased and Hypothetical ACOS
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.metric(
@@ -51,11 +64,20 @@ def render_dashboard(optimization_results: Dict[str, Any]):
             delta_color="inverse"
         )
     
+    with col5:
+        st.metric(
+            "Hypothetischer ACOS",
+            f"{hypothetical_count}",
+            delta="0 Verkäufe",
+            delta_color="off"
+        )
+    
     # Create tabs for different views
-    tab_kw, tab_bid, tab_placement = st.tabs([
+    tab_kw, tab_bid, tab_placement, tab_products = st.tabs([
         "Keyword-Änderungen", 
-        "Gebotsanpassungen",
-        "Platzierungs­anpassungen"
+        "Suchbegriff-Analyse",
+        "Platzierungs­anpassungen",
+        "Produkte"
     ])
     
     with tab_kw:
@@ -66,6 +88,9 @@ def render_dashboard(optimization_results: Dict[str, Any]):
     
     with tab_placement:
         render_placement_adjustments_tab(optimization_results.get('placement_adjustments', []))
+    
+    with tab_products:
+        render_products_tab()
 
     # KI-Empfehlungen Tab entfernt
 
@@ -417,6 +442,8 @@ def render_bid_changes_tab(bid_changes):
                             cols_full.insert(-2, 'orders')  # Insert after clicks, before spend
                         if 'conversion_rate' in full_sorted.columns:
                             cols_full.insert(-1, 'conversion_rate')
+                        if 'hypothetical_acos_note' in full_sorted.columns:
+                            cols_full.append('hypothetical_acos_note')
                         full_disp = full_sorted[cols_full].rename(columns={
                             'customer_search_term':'Suchbegriff',
                             'match_type':'Übereinstimmungstyp',
@@ -425,10 +452,19 @@ def render_bid_changes_tab(bid_changes):
                             'spend':'Ausgaben',
                             'sales':'Verkäufe',
                             'conversion_rate':'CR %',
-                            'acos_pct':'ACOS %'
+                            'acos_pct':'ACOS %',
+                            'hypothetical_acos_note':'Hypothetischer ACOS'
                         })
                         if 'CR %' in full_disp.columns:
                             full_disp['CR %'] = full_disp['CR %'].apply(lambda x: round(x*100,2) if not pd.isna(x) else pd.NA)
+                        
+                        # Highlight rows with hypothetical ACOS
+                        if 'Hypothetischer ACOS' in full_disp.columns:
+                            # Show info about hypothetical ACOS calculations
+                            hyp_acos_count = full_disp['Hypothetischer ACOS'].str.contains('Hypothetischer ACOS', na=False).sum()
+                            if hyp_acos_count > 0:
+                                st.info(f"ℹ️ {hyp_acos_count} Suchbegriffe verwenden hypothetischen ACOS (0 Verkäufe, Preis aus Datenbank)")
+                        
                         st.dataframe(full_disp, use_container_width=True)
 
 
@@ -474,7 +510,14 @@ def render_placement_adjustments_tab(initial_adjustments):
 
             # Check if this is a zero sales campaign and show warning
             if total_row is not None and total_row.get('is_zero_sales', False):
-                st.warning("⚠️ **Hinweis**: Diese Kampagne hat 0€ Umsatz. Der Basis-CPC wurde auf das Mindestgebot von 0,01€ gesetzt.")
+                st.info("ℹ️ **Hinweis**: Diese Kampagne hat 0€ Umsatz. Verkäufe wurden für Berechnungen auf 1€ gesetzt.")
+            
+            # Check if scaling was applied and show scaling info
+            if total_row is not None and total_row.get('scaling_applied', False):
+                integer_multiplier = total_row.get('integer_multiplier', 1)
+                st.warning(f"⚖️ **Skalierung angewendet**: Anpassungen überschritten 900%. "
+                          f"Basis-CPC wurde um {integer_multiplier}x erhöht, "
+                          f"Anpassungen proportional reduziert (max 900%).")
 
             # Display comprehensive metrics using HTML cards
             if total_row is not None and 'total_rpc' in total_row:
@@ -512,6 +555,10 @@ def render_placement_adjustments_tab(initial_adjustments):
                 'min_rpc',
                 'base_cpc'
             ]
+            
+            # Add scaling info if available
+            if any(grp.get('scaling_applied', False)):
+                display_cols.append('integer_multiplier')
             display_cols = [c for c in display_cols if c in grp.columns]
 
             df_display = grp[grp['is_total'] == False][display_cols].copy()
@@ -526,10 +573,271 @@ def render_placement_adjustments_tab(initial_adjustments):
                 'cpc': 'CPC',
                 'rpc': 'RPC',
                 'min_rpc': 'Min. RPC',
-                'base_cpc': 'Basis CPC'
+                'base_cpc': 'Basis CPC',
+                'integer_multiplier': 'CPC Multiplikator'
             }
             df_display = df_display.rename(columns={k: v for k, v in rename_map.items() if k in df_display.columns})
             st.dataframe(df_display, use_container_width=True)
+
+
+def render_products_tab():
+    """Render all products per campaign with their performance and hypothetical ACOS indicators"""
+    st.subheader("Produktleistung pro Kampagne")
+    
+    # Get original campaign data directly - avoid enriched data which might be search terms
+    df_campaign = None
+    
+    # Try to read the original campaign data directly from the temp file
+    if 'temp_upload_filepath' in st.session_state and 'original_campaign_sheet_name' in st.session_state:
+        try:
+            import pandas as pd
+            temp_file = st.session_state.temp_upload_filepath
+            sheet_name = st.session_state.original_campaign_sheet_name
+            df_campaign = pd.read_excel(temp_file, sheet_name=sheet_name)
+            st.info(f"📊 Lade Kampagnendaten direkt aus '{sheet_name}' Sheet")
+        except Exception as e:
+            st.warning(f"⚠️ Fehler beim direkten Laden: {e}")
+    
+    # Fallback: Try optimization results but check if it has Entität column
+    if df_campaign is None and 'optimization_results' in st.session_state:
+        optimization_results = st.session_state.optimization_results
+        if 'df_campaign_with_hypothetical' in optimization_results:
+            potential_df = optimization_results['df_campaign_with_hypothetical']
+            if 'Entität' in potential_df.columns:
+                df_campaign = potential_df
+                st.info("📊 Verwende angereicherte Kampagnendaten (mit Entität)")
+            else:
+                st.warning("⚠️ Angereicherte Daten haben keine Entität-Spalte")
+    
+    # Last resort: Try session state but validate it has Entität column
+    if df_campaign is None and 'df_campaign' in st.session_state:
+        potential_df = st.session_state.df_campaign
+        if potential_df is not None and 'Entität' in potential_df.columns:
+            df_campaign = potential_df
+            st.info("📊 Verwende Kampagnendaten aus Session State (mit Entität)")
+        else:
+            st.warning("⚠️ Session State Kampagnendaten haben keine Entität-Spalte")
+    
+    if df_campaign is None:
+        st.error("❌ Keine validen Kampagnendaten verfügbar")
+        return
+    
+    # Check if we have the Entität column
+    if 'Entität' not in df_campaign.columns:
+        st.error("❌ Keine 'Entität' Spalte gefunden. Dies sind keine Kampagnendaten.")
+        return
+    
+    # Filter for products (Produktanzeige)
+    products_mask = df_campaign['Entität'].astype(str).str.lower() == 'produktanzeige'
+    df_products = df_campaign[products_mask].copy()
+    st.success(f"✅ 'Entität' Spalte gefunden. {len(df_products)} Produktanzeigen gefiltert.")
+    
+    if df_products.empty:
+        st.info("Keine Produktdaten gefunden")
+        return
+    
+    # Calculate hypothetical ACOS for products with 0 sales
+    st.info("🔄 Berechne hypothetischen ACOS für Produkte ohne Verkäufe...")
+    
+    # Import the hypothetical ACOS calculator
+    from app.utils.hypothetical_acos import HypotheticalACOSCalculator
+    
+    # Get target ACOS from configuration
+    target_acos = st.session_state.get('client_config', {}).get('target_acos', 20.0)
+    
+    # Calculate hypothetical ACOS
+    calculator = HypotheticalACOSCalculator()
+    df_products_enriched = calculator.enrich_dataframe_with_hypothetical_acos(df_products, target_acos)
+    
+    st.success(f"📦 **{len(df_products_enriched)} Produkte** gefunden")
+    
+    # Overall summary metrics
+    col1, col2, col3, col4 = st.columns(4)
+    
+    total_spend = df_products_enriched['Ausgaben'].sum() if 'Ausgaben' in df_products_enriched.columns else 0
+    total_sales = df_products_enriched['Verkäufe'].sum() if 'Verkäufe' in df_products_enriched.columns else 0
+    total_clicks = df_products_enriched['Klicks'].sum() if 'Klicks' in df_products_enriched.columns else 0
+    
+    # Count products with hypothetical ACOS
+    hypothetical_count = 0
+    if 'hypothetical_acos_note' in df_products_enriched.columns:
+        hypothetical_count = df_products_enriched['hypothetical_acos_note'].str.contains('Hypothetischer ACOS', na=False).sum()
+    
+    with col1:
+        st.metric("Gesamtausgaben", f"€{total_spend:.2f}")
+    with col2:
+        st.metric("Gesamtumsatz", f"€{total_sales:.2f}")
+    with col3:
+        st.metric("Gesamtklicks", f"{total_clicks}")
+    with col4:
+        st.metric("Hypothetischer ACOS", f"{hypothetical_count}", delta="0 Verkäufe", delta_color="off")
+    
+    # Group products by campaign - check if campaign ID column exists
+    campaign_id_col = None
+    for col in ['Kampagnen-ID', 'kampagnen-id', 'campaign_id', 'Campaign ID']:
+        if col in df_products_enriched.columns:
+            campaign_id_col = col
+            break
+    
+    if campaign_id_col is None:
+        st.warning("Keine Kampagnen-ID Spalte gefunden. Zeige Daten ohne Gruppierung.")
+        # Show all products in one group
+        campaign_groups = [('Alle Produkte', df_products_enriched)]
+    else:
+        campaign_groups = df_products_enriched.groupby(campaign_id_col)
+    
+    for campaign_id, campaign_products in campaign_groups:
+        # Get campaign name
+        campaign_name = "Unbekannt"
+        if 'Kampagnenname' in campaign_products.columns:
+            campaign_name = campaign_products['Kampagnenname'].iloc[0] if not campaign_products['Kampagnenname'].isna().all() else "Unbekannt"
+        elif 'Kampagnenname (Nur zu Informationszwecken)' in campaign_products.columns:
+            campaign_name = campaign_products['Kampagnenname (Nur zu Informationszwecken)'].iloc[0] if not campaign_products['Kampagnenname (Nur zu Informationszwecken)'].isna().all() else "Unbekannt"
+        
+        # Get targeting type
+        targeting_type = "Unbekannt"
+        if 'Targeting-Typ' in campaign_products.columns:
+            targeting_type = campaign_products['Targeting-Typ'].iloc[0] if not campaign_products['Targeting-Typ'].isna().all() else "Unbekannt"
+        
+        st.subheader(f"📢 Kampagne {campaign_id}")
+        st.write(f"**Name:** {campaign_name} | **Targeting:** {targeting_type}")
+        
+        # Campaign summary metrics - check for different possible column names
+        spend_cols = ['Ausgaben', 'ausgaben', 'spend', 'Spend']
+        sales_cols = ['Verkäufe', 'verkäufe', 'sales', 'Sales']
+        clicks_cols = ['Klicks', 'klicks', 'clicks', 'Clicks']
+        orders_cols = ['Bestellungen', 'bestellungen', 'orders', 'Orders']
+        
+        camp_spend = 0
+        for col in spend_cols:
+            if col in campaign_products.columns:
+                camp_spend = campaign_products[col].sum()
+                break
+        
+        camp_sales = 0
+        for col in sales_cols:
+            if col in campaign_products.columns:
+                camp_sales = campaign_products[col].sum()
+                break
+        
+        camp_clicks = 0
+        for col in clicks_cols:
+            if col in campaign_products.columns:
+                camp_clicks = campaign_products[col].sum()
+                break
+        
+        camp_orders = 0
+        for col in orders_cols:
+            if col in campaign_products.columns:
+                camp_orders = campaign_products[col].sum()
+                break
+        
+        # Calculate campaign ACOS - use actual ACOS column which now includes hypothetical values
+        camp_acos = 0
+        if 'ACOS' in campaign_products.columns:
+            # Calculate weighted average of ACOS for products with spend
+            total_spend_with_acos = 0
+            weighted_acos_sum = 0
+            for idx, product in campaign_products.iterrows():
+                product_spend = product.get('Ausgaben', 0)
+                product_acos = product.get('ACOS', 0)
+                if product_spend > 0 and pd.notna(product_acos):
+                    total_spend_with_acos += product_spend
+                    weighted_acos_sum += product_acos * product_spend
+            
+            if total_spend_with_acos > 0:
+                camp_acos = (weighted_acos_sum / total_spend_with_acos) * 100
+        elif camp_sales > 0:
+            camp_acos = (camp_spend / camp_sales * 100)
+        
+        # Count products with hypothetical ACOS in this campaign
+        camp_hypothetical = 0
+        if 'hypothetical_acos_note' in campaign_products.columns:
+            camp_hypothetical = campaign_products['hypothetical_acos_note'].str.contains('Hypothetischer ACOS', na=False).sum()
+        
+        # Campaign metrics in columns
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("Ausgaben", f"€{camp_spend:.2f}")
+        with col2:
+            st.metric("Umsatz", f"€{camp_sales:.2f}")
+        with col3:
+            st.metric("Klicks", f"{camp_clicks}")
+        with col4:
+            st.metric("ACOS", f"{camp_acos:.1f}%")
+        with col5:
+            st.metric("Hyp. ACOS", f"{camp_hypothetical}")
+        
+        # Prepare product table
+        display_cols = ['SKU', 'Ausgaben', 'Verkäufe', 'Klicks', 'Bestellungen', 'ACOS', 'Conversion-Rate']
+        
+        # Add hypothetical ACOS indicator
+        campaign_products_display = campaign_products.copy()
+        
+        # Create hypothetical ACOS indicator
+        if 'hypothetical_acos_note' in campaign_products_display.columns:
+            campaign_products_display['Hyp. ACOS'] = campaign_products_display['hypothetical_acos_note'].apply(
+                lambda x: "✅ Ja" if pd.notna(x) and 'Hypothetischer ACOS' in str(x) else "❌ Nein"
+            )
+            display_cols.append('Hyp. ACOS')
+        
+        # Filter columns that exist
+        existing_cols = [col for col in display_cols if col in campaign_products_display.columns]
+        
+        if existing_cols:
+            df_display = campaign_products_display[existing_cols].copy()
+            
+            # Format ACOS column - this now includes hypothetical ACOS values
+            if 'ACOS' in df_display.columns:
+                df_display['ACOS'] = df_display['ACOS'].apply(
+                    lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "0.0%"
+                )
+            
+            # Format Conversion Rate
+            if 'Conversion-Rate' in df_display.columns:
+                df_display['Conversion-Rate'] = df_display['Conversion-Rate'].apply(
+                    lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "0.0%"
+                )
+            
+            # Format monetary columns
+            if 'Ausgaben' in df_display.columns:
+                df_display['Ausgaben'] = df_display['Ausgaben'].apply(
+                    lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00"
+                )
+            
+            if 'Verkäufe' in df_display.columns:
+                df_display['Verkäufe'] = df_display['Verkäufe'].apply(
+                    lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00"
+                )
+            
+            st.dataframe(df_display, use_container_width=True)
+        
+        # Show hypothetical ACOS details if any exist
+        if camp_hypothetical > 0:
+            with st.expander(f"🔍 Details zu {camp_hypothetical} Produkten mit hypothetischem ACOS"):
+                hyp_products = campaign_products[
+                    campaign_products['hypothetical_acos_note'].str.contains('Hypothetischer ACOS', na=False)
+                ]
+                
+                for idx, product in hyp_products.iterrows():
+                    sku = product.get('SKU', 'Unbekannt')
+                    note = product.get('hypothetical_acos_note', '')
+                    spend = product.get('Ausgaben', 0)
+                    acos_value = product.get('ACOS', 0)
+                    
+                    st.write(f"**{sku}** (€{spend:.2f} Ausgaben): {note}")
+                    if pd.notna(acos_value):
+                        st.write(f"   → **ACOS wurde ersetzt:** {acos_value*100:.1f}%")
+    
+    # Legend
+    st.markdown("---")
+    st.markdown("""
+    **Legende:**
+    - **ACOS**: Zeigt den tatsächlichen ACOS oder hypothetischen ACOS (bei 0 Verkäufen)
+    - **Hyp. ACOS**: Zeigt an, ob für dieses Produkt ein hypothetischer ACOS berechnet wurde
+    - **✅ Ja**: Hypothetischer ACOS wurde basierend auf Datenbankpreis berechnet und in ACOS-Spalte eingetragen
+    - **❌ Nein**: Regulärer ACOS basierend auf tatsächlichen Verkäufen
+    """)
 
 
 def render_recommendations_tab(recommendations):

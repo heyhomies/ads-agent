@@ -66,6 +66,19 @@ def analyze_keywords(state: PPCState) -> PPCState:
                 else:
                     df_search_terms[col] = np.nan
     
+    # Calculate hypothetical ACOS for products with 0 sales using database pricing
+    from app.utils.hypothetical_acos import HypotheticalACOSCalculator
+    try:
+        calculator = HypotheticalACOSCalculator()
+        df_search_terms = calculator.enrich_dataframe_with_hypothetical_acos(
+            df_search_terms, 
+            client_config.get('target_acos', 20.0)
+        )
+        # Update state with enriched data
+        state['df_search_terms'] = df_search_terms
+    except Exception as e:
+        state['debug_info'].append(f"Warning: Could not calculate hypothetical ACOS: {e}")
+    
     # Convert numeric columns to numeric type in case they're strings
     for col in ['clicks', 'orders', 'acos', 'conversion_rate']:
         if col in df_search_terms.columns:
