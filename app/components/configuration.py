@@ -32,7 +32,7 @@ def render_configuration():
         # Keyword ACOS threshold
         keyword_acos = st.slider(
             "Keyword ACOS (%)",
-            min_value=5.0,
+            min_value=0.0,
             max_value=200.0,
             value=st.session_state.client_config.get('keyword_acos', 20.0),
             step=1.0,
@@ -42,18 +42,18 @@ def render_configuration():
         # Product ACOS threshold  
         product_acos = st.slider(
             "Produkt ACOS (%)",
-            min_value=5.0,
-            max_value=300.0,
+            min_value=0.0,
+            max_value=200.0,
             value=st.session_state.client_config.get('product_acos', 20.0),
-            step=5.0,
+            step=1.0,
             help="ACOS-Grenzwert für Produkte (einschließlich hypothetischer ACOS für Produkte ohne Verkäufe)"
         )
         
         # Target ACOS for placement adjustments (Gebotsanpassungen)
         target_acos_placement = st.slider(
             "Ziel-ACOS für Gebotsanpassungen (%)",
-            min_value=5.0,
-            max_value=50.0,
+            min_value=0.0,
+            max_value=200.0,
             value=st.session_state.client_config.get('target_acos_placement', 20.0),
             step=0.5,
             help="Ziel-ACOS für die Berechnung der Placement-Bid-Anpassungen"

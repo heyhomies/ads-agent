@@ -187,51 +187,70 @@ def generate_export_excel(original_excel_path: str,
                 bid_cols_to_update.append('Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)')
             
             if entity_col and targeting_col and bid_cols_to_update and campaign_base_cpc:
+                st.info(f"🔍 **Base CPC Updates:** Processing {len(campaign_base_cpc)} campaigns")
+                
                 for camp_id, base_cpc_val in campaign_base_cpc.items():
                     try:
                         base_cpc_numeric = float(base_cpc_val)
+                        base_cpc_rounded = round(base_cpc_numeric, 2)
                     except (ValueError, TypeError):
+                        st.warning(f"   ⚠️ Invalid Base CPC value for campaign {camp_id}: {base_cpc_val}")
                         continue
                     
                     # Get campaign targeting type for this campaign
                     campaign_rows = df_to_update[df_to_update['Kampagnen-ID'] == camp_id]
                     if campaign_rows.empty:
+                        st.warning(f"   ⚠️ No rows found for campaign {camp_id}")
                         continue
                     
                     # Get targeting type from any row in this campaign (should be consistent)
                     targeting_type = campaign_rows[targeting_col].iloc[0] if not campaign_rows[targeting_col].empty else None
                     
                     if pd.isna(targeting_type):
+                        st.warning(f"   ⚠️ No targeting type for campaign {camp_id}")
                         continue
                     
                     targeting_type_str = str(targeting_type).lower().strip()
                     
-                    # Determine target entity based on targeting type
+                    # Determine target entity type based on targeting type
                     target_entity = None
-                    if 'automatisch' in targeting_type_str or 'auto' in targeting_type_str:
+                    if 'automatisch' in targeting_type_str or 'automatic' in targeting_type_str:
+                        # Auto campaigns: Update "Produkt-Targeting" or "Product Targeting" rows
                         target_entity = 'produkt-targeting'
+                        entity_display = '🎯 Product Targeting (Auto)'
                     elif 'manuell' in targeting_type_str or 'manual' in targeting_type_str:
+                        # Manual campaigns: Update "Keyword" rows  
                         target_entity = 'keyword'
+                        entity_display = '🔤 Keywords (Manual)'
+                    else:
+                        st.warning(f"   ⚠️ Unknown targeting type '{targeting_type_str}' for campaign {camp_id}")
+                        continue
                     
-                    if target_entity:
-                        # Find rows to update
-                        mask_base_cpc = (
-                            (df_to_update['Kampagnen-ID'] == camp_id) &
-                            (df_to_update[entity_col].astype(str).str.lower() == target_entity)
-                        )
+                    # Find rows to update based on campaign ID and entity type
+                    mask_base_cpc = (
+                        (df_to_update['Kampagnen-ID'] == camp_id) &
+                        (df_to_update[entity_col].astype(str).str.lower() == target_entity)
+                    )
+                    
+                    idxs = df_to_update[mask_base_cpc].index
+                    
+                    if not idxs.empty:
+                        # Update bid columns with 2 decimal places
+                        for bid_col in bid_cols_to_update:
+                            df_to_update.loc[idxs, bid_col] = base_cpc_rounded
+                        # Ensure Operation column accepts string values before setting
+                        if df_to_update['Operation'].dtype != 'object':
+                            df_to_update['Operation'] = df_to_update['Operation'].astype('object')
+                        df_to_update.loc[idxs, 'Operation'] = 'Update'
+                        updated_base_cpc_count += len(idxs)
                         
-                        idxs = df_to_update[mask_base_cpc].index
-                        
-                        if not idxs.empty:
-                            # Update bid columns with 2 decimal places
-                            base_cpc_rounded = round(base_cpc_numeric, 2)
-                            for bid_col in bid_cols_to_update:
-                                df_to_update.loc[idxs, bid_col] = base_cpc_rounded
-                            # Ensure Operation column accepts string values before setting
-                            if df_to_update['Operation'].dtype != 'object':
-                                df_to_update['Operation'] = df_to_update['Operation'].astype('object')
-                            df_to_update.loc[idxs, 'Operation'] = 'Update'
-                            updated_base_cpc_count += len(idxs)
+                        st.success(f"   ✅ {entity_display}: Campaign {camp_id} - {len(idxs)} rows updated with Base CPC €{base_cpc_rounded:.2f}")
+                    else:
+                        # Check what entities actually exist in this campaign
+                        campaign_entities = campaign_rows[entity_col].astype(str).str.lower().unique()
+                        st.warning(f"   ⚠️ No '{target_entity}' rows found for campaign {camp_id}. Available entities: {sorted(campaign_entities)}")
+                
+                st.info(f"📊 **Total Base CPC Updates:** {updated_base_cpc_count} rows")
             
             elif not entity_col:
                 st.warning("⚠️ No Entity column found. Base CPC updates skipped.")

@@ -16,61 +16,6 @@ def render_dashboard(optimization_results: Dict[str, Any]):
     # Extract data from results
     keyword_changes = optimization_results.get("keyword_changes", [])
     bid_changes = optimization_results.get("bid_changes", [])
-    summary = optimization_results.get("summary", {})
-    
-    # Check for hypothetical ACOS data
-    hypothetical_count = 0
-    # First try to get enriched data from optimization results
-    if 'df_search_terms_with_hypothetical' in optimization_results:
-        df_st = optimization_results['df_search_terms_with_hypothetical']
-        if 'hypothetical_acos_note' in df_st.columns:
-            hypothetical_count = df_st['hypothetical_acos_note'].str.contains('Hypothetischer ACOS', na=False).sum()
-    # Fallback to session state
-    elif 'df_search_terms' in st.session_state and st.session_state.df_search_terms is not None:
-        df_st = st.session_state.df_search_terms
-        if 'hypothetical_acos_note' in df_st.columns:
-            hypothetical_count = df_st['hypothetical_acos_note'].str.contains('Hypothetischer ACOS', na=False).sum()
-    
-    # Create metrics row - Updated to show Bids Increased/Decreased and Hypothetical ACOS
-    col1, col2, col3, col4, col5 = st.columns(5)
-    
-    with col1:
-        st.metric(
-            "Analysierte Keywords", 
-            f"{summary.get('total_keywords_analyzed', 0)}"
-        )
-    
-    with col2:
-        st.metric(
-            "Zu pausierende Keywords",
-            f"{summary.get('keywords_to_pause', 0)}",
-            delta=f"{summary.get('keywords_to_pause', 0)}", 
-            delta_color="inverse"
-        )
-    
-    with col3:
-        st.metric(
-            "Erhöhte Gebote",
-            f"{summary.get('bids_to_increase', 0)}",
-             delta=f"{summary.get('avg_bid_increase', 0):.1f}% Ø", 
-             delta_color="normal"
-        )
-    
-    with col4:
-        st.metric(
-            "Gesenkte Gebote",
-            f"{summary.get('bids_to_decrease', 0)}",
-            delta=f"{summary.get('avg_bid_decrease', 0):.1f}% Ø", 
-            delta_color="inverse"
-        )
-    
-    with col5:
-        st.metric(
-            "Hypothetischer ACOS",
-            f"{hypothetical_count}",
-            delta="0 Verkäufe",
-            delta_color="off"
-        )
     
     # Create tabs for different views
     tab_kw, tab_bid, tab_placement, tab_products, tab_export = st.tabs([
@@ -220,7 +165,7 @@ def render_keyword_changes_tab(keyword_perf):
     keyword_acos = client_config.get('keyword_acos', 20.0)
     max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
     
-    st.info(f"📊 **Aktuelle Konfiguration:** ACOS-Limit {keyword_acos}% | Max. Klicks ohne Conversion: {max_keyword_clicks}")
+    st.info(f"📊 **Analyse-Kriterien:** ACOS-Limit {keyword_acos}% | Max. Klicks ohne Conversion: {max_keyword_clicks}")
     
     if not keyword_perf:
         st.info("Keine Keyword-Daten verfügbar")
@@ -261,82 +206,62 @@ def render_keyword_changes_tab(keyword_perf):
         st.markdown(f"### 📊 Kampagne **{campaign_id}**")
         st.markdown(f"**Name:** {campaign_name} | **Targeting:** {targeting_type}")
 
-        # Categorize keywords more meaningfully
+        # Simplified keyword categorization into 3 meaningful groups
         def categorize_keyword(row):
             clicks = row.get('clicks', 0)
             orders = row.get('orders', 0)
             acos = row.get('acos', 0)
             
-            # Zu pausieren: Hoher ACOS oder zu viele Klicks ohne Conversion
-            if clicks >= max_keyword_clicks and orders == 0:
+            # 1. Zu pausieren: Above limits (high ACOS or too many clicks without conversion)
+            if acos > (keyword_acos / 100):  # Above ACOS limit
                 return 'zu_pausieren'
-            elif acos > (keyword_acos / 100) * 2:  # Doppelt so hoch wie Limit
+            elif clicks >= max_keyword_clicks and orders == 0:  # Too many clicks without conversion
                 return 'zu_pausieren'
             
-            # Top Performer: Niedrige ACOS und Conversions
-            elif acos <= (keyword_acos / 100) * 0.5 and orders > 0:  # Halb des Limits
-                return 'top_performer'
-            elif acos <= (keyword_acos / 100) and orders >= 3:  # Guter ACOS mit mehreren Orders
-                return 'top_performer'
+            # 2. Zu wenig Daten: Below conversion limit but no sales yet
+            elif orders == 0:  # No conversions yet, but within limits
+                return 'zu_wenig_daten'
             
-            # Optimierungsbedürftig: Mittlerer ACOS
-            elif (keyword_acos / 100) < acos <= (keyword_acos / 100) * 1.5 and orders > 0:
-                return 'optimierungsbedürftig'
-            
-            # Wenig Daten: Zu wenige Klicks für Bewertung
-            elif clicks < 10:
-                return 'wenig_daten'
-            
-            # Vielversprechend: Niedrige ACOS aber wenige Orders (mindestens 1)
-            elif acos <= (keyword_acos / 100) and orders > 0 and orders <= 2 and clicks >= 10:
-                return 'vielversprechend'
-            
-            # Standard gut/schlecht
-            elif row.get('status') == 'gut':
-                return 'standard_gut'
+            # 3. Bleibende Keywords: Within bounds with conversions (will be sorted by ACOS)
             else:
-                return 'standard_schlecht'
+                return 'bleibende_keywords'
 
         grp = grp.copy()
         grp['category'] = grp.apply(categorize_keyword, axis=1)
         
-        # Create expandable sections for different categories
+        # Create expandable sections for the 3 main categories
         categories = [
-            ('zu_pausieren', '⏸️ Zu pausieren'),
-            ('top_performer', '🏆 Top Performer'),  
-            ('optimierungsbedürftig', '⚡ Optimierungsbedürftig'),
-            ('vielversprechend', '🌟 Vielversprechend'),
-            ('wenig_daten', '📊 Wenig Daten'),
-            ('standard_gut', '✅ Standard gut'),
-            ('standard_schlecht', '❌ Standard schlecht')
+            ('zu_pausieren', '⏸️ Zu pausierende Keywords'),
+            ('zu_wenig_daten', '📊 Zu wenig Daten'),
+            ('bleibende_keywords', '✅ Aktive Keywords')
         ]
         
         for cat_key, cat_name in categories:
             cat_data = grp[grp['category'] == cat_key]
             if not cat_data.empty:
                 with st.expander(f"{cat_name} ({len(cat_data)} Keywords)"):
-                    # Show explanation for category with current config values
+                    # Show explanation for each category
                     if cat_key == 'zu_pausieren':
-                        st.markdown(f"⚠️ **Diese Keywords sollten pausiert werden:** Hoher ACOS (>{keyword_acos*2:.1f}%) oder ≥{max_keyword_clicks} Klicks ohne Conversion")
-                    elif cat_key == 'top_performer':
-                        st.markdown(f"🎯 **Ausgezeichnete Performance:** ACOS ≤{keyword_acos/2:.1f}% oder guter ACOS (≤{keyword_acos}%) mit ≥3 Bestellungen")
-                    elif cat_key == 'optimierungsbedürftig':
-                        st.markdown(f"⚡ **Verbesserungspotential:** ACOS zwischen {keyword_acos:.1f}% und {keyword_acos*1.5:.1f}% mit Conversions")
-                    elif cat_key == 'vielversprechend':
-                        st.markdown(f"🌟 **Niedrige ACOS mit ersten Erfolgen:** ACOS ≤{keyword_acos:.1f}% mit 1-2 Orders und ≥10 Klicks")
-                    elif cat_key == 'wenig_daten':
-                        st.markdown("📊 **Zu wenige Klicks (<10):** Abwarten oder Budget erhöhen für mehr Daten")
-                    elif cat_key == 'standard_gut':
-                        st.markdown(f"✅ **Standard gut:** ACOS ≤{keyword_acos:.1f}% (Konfigurationslimit)")
-                    elif cat_key == 'standard_schlecht':
-                        st.markdown(f"❌ **Standard schlecht:** ACOS >{keyword_acos:.1f}% (über Konfigurationslimit)")
+                        st.markdown(f"⚠️ **Keywords über den Limits:** ACOS >{keyword_acos:.1f}% oder ≥{max_keyword_clicks} Klicks ohne Conversion")
+                    elif cat_key == 'zu_wenig_daten':
+                        st.markdown(f"📊 **Noch keine Conversions:** Keywords innerhalb der Limits aber noch ohne Bestellungen")
+                    elif cat_key == 'bleibende_keywords':
+                        st.markdown(f"✅ **Aktive Keywords mit Conversions:** Innerhalb der Limits (ACOS ≤{keyword_acos:.1f}%) und bereits mit Bestellungen - sortiert nach ACOS")
                     
-                    # Prepare display data
-                    cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
+                    # Sort "Aktive Keywords" by ACOS (ascending - best first)
+                    if cat_key == 'bleibende_keywords':
+                        cat_data = cat_data.sort_values('acos', ascending=True)
+                    
+                    # Prepare display data - no reason needed for active keywords
+                    if cat_key == 'bleibende_keywords':
+                        cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos']
+                    else:
+                        cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
+                    
                     if 'match_type' in cat_data.columns:
                         cols_to_show.insert(1, 'match_type')
                     if 'orders' in cat_data.columns:
-                        cols_to_show.insert(-3, 'orders')
+                        cols_to_show.insert(-2 if cat_key == 'bleibende_keywords' else -3, 'orders')
                     if 'conversion_rate' in cat_data.columns:
                         cols_to_show.insert(-1, 'conversion_rate')
                     
@@ -936,8 +861,10 @@ def render_export_tab(optimization_results: Dict[str, Any]):
         else:
             st.info("ℹ️ Keine Platzierungsdaten verfügbar")
     
-    with st.expander("🎯 **Keyword-Gebots-Updates (Basis-CPC)**"):
-        st.markdown(f"**Keywords erhalten die jeweiligen Basis-CPCs ihrer Kampagnen**")
+    with st.expander("🎯 **Gebots-Updates (Basis-CPC)**"):
+        st.markdown(f"**Alle relevanten Entitäten erhalten die jeweiligen Basis-CPCs ihrer Kampagnen:**")
+        st.markdown("• **Manuelle Kampagnen**: 🔤 Keywords + 🛍️ Product Ads")  
+        st.markdown("• **Automatische Kampagnen**: 🎯 Product Targeting")
         st.markdown(f"📊 **Berechnung**: Basis-CPC = min_rpc × {target_acos_placement}% Ziel-ACOS")
         
         if 'placement_adjustments' in optimization_results:
@@ -974,6 +901,10 @@ def render_export_tab(optimization_results: Dict[str, Any]):
             st.info("ℹ️ Keine Platzierungsdaten für Basis-CPC Berechnung verfügbar")
         
     with st.expander("⏸️ **Keyword-Pausierung**"):
+        client_config = st.session_state.get('client_config', {})
+        keyword_acos = client_config.get('keyword_acos', 20.0)
+        max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
+        
         st.markdown(f"**Pausierungs-Kriterien**: ACOS >{keyword_acos:.1f}% oder ≥{max_keyword_clicks} Klicks ohne Conversion")
         st.markdown(f"📊 **Aktuelle Konfiguration**: Keyword ACOS Limit: {keyword_acos}% | Max Klicks: {max_keyword_clicks}")
         
@@ -1120,11 +1051,18 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                             st.session_state.df_campaign, 
                             target_acos=current_target_acos
                         )
-                        # Filter out totals again
-                        placement_changes_filtered = [p for p in placement_changes_filtered if not p.get('is_total', False)]
+                        # Keep totals for Base CPC extraction in export, but filter for display purposes if needed
+                        # The export function needs the totals rows to extract base_cpc_total values
                     
                     # Debug: Show what config is being passed to export
                     st.info(f"🔧 **Übergabe an Export:** {client_config}")
+                    
+                    # Debug: Show placement changes structure
+                    total_changes = [p for p in placement_changes_filtered if p.get('is_total', False)]
+                    st.info(f"🔍 **Placement Changes Debug:** Total records: {len(placement_changes_filtered)}, Total rows with base_cpc_total: {len(total_changes)}")
+                    if total_changes:
+                        for total in total_changes:
+                            st.info(f"   📊 Campaign {total.get('campaign_id')}: base_cpc_total = €{total.get('base_cpc_total', 'N/A')}")
                     
                     # Generate export file
                     export_buffer = generate_export_excel(
@@ -1157,7 +1095,7 @@ def render_export_tab(optimization_results: Dict[str, Any]):
     if st.session_state.get('export_ready', False) and st.session_state.get('export_buffer'):
         st.success("✅ Export bereit!")
         st.download_button(
-            label="📥 Excel-Datei herunterladen",
+            label="Aktualisierter Bericht herunterladen",
             data=st.session_state.export_buffer.getvalue(),
             file_name="Amazon_PPC_Optimized.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
