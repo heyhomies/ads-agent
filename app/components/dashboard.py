@@ -73,11 +73,12 @@ def render_dashboard(optimization_results: Dict[str, Any]):
         )
     
     # Create tabs for different views
-    tab_kw, tab_bid, tab_placement, tab_products = st.tabs([
+    tab_kw, tab_bid, tab_placement, tab_products, tab_export = st.tabs([
         "Keyword-Änderungen", 
         "Suchbegriff-Analyse",
         "Platzierungs­anpassungen",
-        "Produkte"
+        "Produkte",
+        "Export"
     ])
     
     with tab_kw:
@@ -91,6 +92,9 @@ def render_dashboard(optimization_results: Dict[str, Any]):
     
     with tab_products:
         render_products_tab()
+    
+    with tab_export:
+        render_export_tab(optimization_results)
 
     # KI-Empfehlungen Tab entfernt
 
@@ -207,16 +211,16 @@ def render_overview_tab(optimization_results: Dict[str, Any]):
 
 
 def render_keyword_changes_tab(keyword_perf):
-    """Zeigt gut und schlecht laufende Keywords je Kampagne an (keine Gebotsratschläge)"""
+    """Zeigt Keywords in sinnvollen Kategorien basierend auf Performance und Handlungsbedarf"""
     import pandas as pd
-    st.subheader("Keyword-Leistung")
+    st.subheader("Keyword-Analyse")
 
     # Get current configuration values
     client_config = st.session_state.get('client_config', {})
-    target_acos = client_config.get('target_acos', 20.0)
-    min_conversion_rate = client_config.get('min_conversion_rate', 10.0)
+    keyword_acos = client_config.get('keyword_acos', 20.0)
+    max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
     
-    st.info(f"📊 **Aktuelle Filter:** Target ACOS ≤ {target_acos}% UND Conversion Rate ≥ {min_conversion_rate}% = 'gut'")
+    st.info(f"📊 **Aktuelle Konfiguration:** ACOS-Limit {keyword_acos}% | Max. Klicks ohne Conversion: {max_keyword_clicks}")
     
     if not keyword_perf:
         st.info("Keine Keyword-Daten verfügbar")
@@ -226,9 +230,8 @@ def render_keyword_changes_tab(keyword_perf):
     if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
         from app.utils.keyword_classifier import classify_keywords
         # Re-run classification with current config values
-        target_acos_decimal = target_acos / 100  # Convert to decimal for classifier
-        min_conversion_rate_decimal = min_conversion_rate / 100  # Convert to decimal for classifier
-        keyword_perf = classify_keywords(st.session_state.df_campaign, target_acos_decimal, min_conversion_rate_decimal)
+        keyword_acos_decimal = keyword_acos / 100  # Convert to decimal for classifier
+        keyword_perf = classify_keywords(st.session_state.df_campaign, keyword_acos_decimal)
     
     if not keyword_perf:
         st.info("Keine Keyword-Daten verfügbar")
@@ -255,83 +258,116 @@ def render_keyword_changes_tab(keyword_perf):
                 if 'targeting-typ' in first_row:
                     targeting_type = first_row['targeting-typ']
         
-        st.markdown(f"### Kampagne **{campaign_id}**")
+        st.markdown(f"### 📊 Kampagne **{campaign_id}**")
         st.markdown(f"**Name:** {campaign_name} | **Targeting:** {targeting_type}")
 
-        good = grp[grp['status'] == 'gut']
-        bad = grp[grp['status'] == 'schlecht']
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("Gut laufende Keywords")
-            if good.empty:
-                st.info("Keine")
+        # Categorize keywords more meaningfully
+        def categorize_keyword(row):
+            clicks = row.get('clicks', 0)
+            orders = row.get('orders', 0)
+            acos = row.get('acos', 0)
+            
+            # Zu pausieren: Hoher ACOS oder zu viele Klicks ohne Conversion
+            if clicks >= max_keyword_clicks and orders == 0:
+                return 'zu_pausieren'
+            elif acos > (keyword_acos / 100) * 2:  # Doppelt so hoch wie Limit
+                return 'zu_pausieren'
+            
+            # Top Performer: Niedrige ACOS und Conversions
+            elif acos <= (keyword_acos / 100) * 0.5 and orders > 0:  # Halb des Limits
+                return 'top_performer'
+            elif acos <= (keyword_acos / 100) and orders >= 3:  # Guter ACOS mit mehreren Orders
+                return 'top_performer'
+            
+            # Optimierungsbedürftig: Mittlerer ACOS
+            elif (keyword_acos / 100) < acos <= (keyword_acos / 100) * 1.5 and orders > 0:
+                return 'optimierungsbedürftig'
+            
+            # Wenig Daten: Zu wenige Klicks für Bewertung
+            elif clicks < 10:
+                return 'wenig_daten'
+            
+            # Vielversprechend: Niedrige ACOS aber wenige Orders (mindestens 1)
+            elif acos <= (keyword_acos / 100) and orders > 0 and orders <= 2 and clicks >= 10:
+                return 'vielversprechend'
+            
+            # Standard gut/schlecht
+            elif row.get('status') == 'gut':
+                return 'standard_gut'
             else:
-                # Include match_type, orders, and conversion_rate if available
-                cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
-                if 'match_type' in good.columns:
-                    cols_to_show.insert(1, 'match_type')
-                if 'orders' in good.columns:
-                    cols_to_show.insert(-3, 'orders')  # Insert after clicks, before spend
-                if 'conversion_rate' in good.columns:
-                    cols_to_show.insert(-1, 'conversion_rate')  # Insert before reason
-                df_good = good[cols_to_show].copy()
-                
-                rename_dict = {
-                    'keyword': 'Keyword',
-                    'clicks': 'Klicks',
-                    'orders': 'Bestellungen',
-                    'spend': 'Ausgaben',
-                    'sales': 'Verkäufe',
-                    'acos': 'ACOS %',
-                    'conversion_rate': 'CR %',
-                    'reason': 'Grund'
-                }
-                if 'match_type' in df_good.columns:
-                    rename_dict['match_type'] = 'Übereinstimmungstyp'
-                df_good = df_good.rename(columns=rename_dict)
-                # Format ACOS and CR as Prozentwert (convert from decimal)
-                if 'ACOS %' in df_good.columns:
-                    df_good['ACOS %'] = df_good['ACOS %'].apply(lambda x: round(x*100,2) if not pd.isna(x) else pd.NA)
-                if 'CR %' in df_good.columns:
-                    df_good['CR %'] = df_good['CR %'].apply(lambda x: round(x*100,2) if not pd.isna(x) else pd.NA)
-                st.dataframe(df_good, use_container_width=True)
+                return 'standard_schlecht'
+
+        grp = grp.copy()
+        grp['category'] = grp.apply(categorize_keyword, axis=1)
         
-        with col2:
-            st.subheader("Schlecht laufende Keywords")
-            if bad.empty:
-                st.info("Keine")
-            else:
-                # Include match_type, orders, and conversion_rate if available
-                cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
-                if 'match_type' in bad.columns:
-                    cols_to_show.insert(1, 'match_type')
-                if 'orders' in bad.columns:
-                    cols_to_show.insert(-3, 'orders')  # Insert after clicks, before spend
-                if 'conversion_rate' in bad.columns:
-                    cols_to_show.insert(-1, 'conversion_rate')  # Insert before reason
-                df_bad = bad[cols_to_show].copy()
-                
-                rename_dict = {
-                    'keyword': 'Keyword',
-                    'clicks': 'Klicks',
-                    'orders': 'Bestellungen',
-                    'spend': 'Ausgaben',
-                    'sales': 'Verkäufe',
-                    'acos': 'ACOS %',
-                    'conversion_rate': 'CR %',
-                    'reason': 'Grund'
-                }
-                if 'match_type' in df_bad.columns:
-                    rename_dict['match_type'] = 'Übereinstimmungstyp'
-                df_bad = df_bad.rename(columns=rename_dict)
-                # Format ACOS and CR as Prozentwert (convert from decimal)
-                if 'ACOS %' in df_bad.columns:
-                    df_bad['ACOS %'] = df_bad['ACOS %'].apply(lambda x: round(x*100,2) if not pd.isna(x) else pd.NA)
-                if 'CR %' in df_bad.columns:
-                    df_bad['CR %'] = df_bad['CR %'].apply(lambda x: round(x*100,2) if not pd.isna(x) else pd.NA)
-                st.dataframe(df_bad, use_container_width=True)
+        # Create expandable sections for different categories
+        categories = [
+            ('zu_pausieren', '⏸️ Zu pausieren'),
+            ('top_performer', '🏆 Top Performer'),  
+            ('optimierungsbedürftig', '⚡ Optimierungsbedürftig'),
+            ('vielversprechend', '🌟 Vielversprechend'),
+            ('wenig_daten', '📊 Wenig Daten'),
+            ('standard_gut', '✅ Standard gut'),
+            ('standard_schlecht', '❌ Standard schlecht')
+        ]
+        
+        for cat_key, cat_name in categories:
+            cat_data = grp[grp['category'] == cat_key]
+            if not cat_data.empty:
+                with st.expander(f"{cat_name} ({len(cat_data)} Keywords)"):
+                    # Show explanation for category with current config values
+                    if cat_key == 'zu_pausieren':
+                        st.markdown(f"⚠️ **Diese Keywords sollten pausiert werden:** Hoher ACOS (>{keyword_acos*2:.1f}%) oder ≥{max_keyword_clicks} Klicks ohne Conversion")
+                    elif cat_key == 'top_performer':
+                        st.markdown(f"🎯 **Ausgezeichnete Performance:** ACOS ≤{keyword_acos/2:.1f}% oder guter ACOS (≤{keyword_acos}%) mit ≥3 Bestellungen")
+                    elif cat_key == 'optimierungsbedürftig':
+                        st.markdown(f"⚡ **Verbesserungspotential:** ACOS zwischen {keyword_acos:.1f}% und {keyword_acos*1.5:.1f}% mit Conversions")
+                    elif cat_key == 'vielversprechend':
+                        st.markdown(f"🌟 **Niedrige ACOS mit ersten Erfolgen:** ACOS ≤{keyword_acos:.1f}% mit 1-2 Orders und ≥10 Klicks")
+                    elif cat_key == 'wenig_daten':
+                        st.markdown("📊 **Zu wenige Klicks (<10):** Abwarten oder Budget erhöhen für mehr Daten")
+                    elif cat_key == 'standard_gut':
+                        st.markdown(f"✅ **Standard gut:** ACOS ≤{keyword_acos:.1f}% (Konfigurationslimit)")
+                    elif cat_key == 'standard_schlecht':
+                        st.markdown(f"❌ **Standard schlecht:** ACOS >{keyword_acos:.1f}% (über Konfigurationslimit)")
+                    
+                    # Prepare display data
+                    cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
+                    if 'match_type' in cat_data.columns:
+                        cols_to_show.insert(1, 'match_type')
+                    if 'orders' in cat_data.columns:
+                        cols_to_show.insert(-3, 'orders')
+                    if 'conversion_rate' in cat_data.columns:
+                        cols_to_show.insert(-1, 'conversion_rate')
+                    
+                    df_display = cat_data[cols_to_show].copy()
+                    
+                    rename_dict = {
+                        'keyword': 'Keyword',
+                        'clicks': 'Klicks',
+                        'orders': 'Bestellungen',
+                        'spend': 'Ausgaben',
+                        'sales': 'Verkäufe',
+                        'acos': 'ACOS %',
+                        'conversion_rate': 'CR %',
+                        'match_type': 'Übereinstimmungstyp',
+                        'reason': 'Grund'
+                    }
+                    df_display = df_display.rename(columns=rename_dict)
+                    
+                    # Format ACOS and CR as Prozentwert (convert from decimal)
+                    if 'ACOS %' in df_display.columns:
+                        df_display['ACOS %'] = df_display['ACOS %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
+                    if 'CR %' in df_display.columns:
+                        df_display['CR %'] = df_display['CR %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
+                    
+                    # Monetary columns
+                    if 'Ausgaben' in df_display.columns:
+                        df_display['Ausgaben'] = df_display['Ausgaben'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
+                    if 'Verkäufe' in df_display.columns:
+                        df_display['Verkäufe'] = df_display['Verkäufe'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
+                    
+                    st.dataframe(df_display, use_container_width=True)
 
 
 def render_bid_changes_tab(bid_changes):
@@ -469,29 +505,26 @@ def render_bid_changes_tab(bid_changes):
 
 
 def render_placement_adjustments_tab(initial_adjustments):
-    """Render placement bid adjustment recommendations per campaign with interactive target ACOS slider"""
+    """Render placement bid adjustment recommendations per campaign using configured target ACOS"""
     import streamlit as st  # ensure local import for type checker
     from app.utils.placement_adjuster import compute_placement_adjustments
 
-    st.subheader("Placement Bid Adjustments")
+    st.subheader("Gebotsanpassungen")
 
-    # Determine default target ACOS from configuration or 20 %
-    default_target = st.session_state.get('client_config', {}).get('target_acos', 20.0)
+    # Get target ACOS from unified configuration
+    client_config = st.session_state.get('client_config', {})
+    target_acos_pct = client_config.get('target_acos_placement', 20.0)
+    
+    # Display current target ACOS setting
+    st.info(f"📊 **Aktuelle Konfiguration:** Ziel-ACOS: {target_acos_pct}% (konfigurierbar unter 'Konfiguration')")
 
-    target_acos_pct = st.slider(
-        "Target ACOS (%)",
-        min_value=5.0,
-        max_value=50.0,
-        value=float(default_target),
-        step=0.5,
-        key="placement_target_acos_slider",
-        help="Adjust the target ACOS to see updated placement recommendations"
-    )
-
-    # Recompute recommendations based on slider value
+    # Recompute recommendations based on configuration value
     if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
         df_campaign = st.session_state.df_campaign
-        placement_adjustments = compute_placement_adjustments(df_campaign, target_acos=target_acos_pct / 100)
+        placement_adjustments = compute_placement_adjustments(
+            df_campaign, 
+            target_acos=target_acos_pct / 100
+        )
     else:
         placement_adjustments = initial_adjustments or []
 
@@ -642,12 +675,12 @@ def render_products_tab():
     # Import the hypothetical ACOS calculator
     from app.utils.hypothetical_acos import HypotheticalACOSCalculator
     
-    # Get target ACOS from configuration
-    target_acos = st.session_state.get('client_config', {}).get('target_acos', 20.0)
+    # Get product ACOS from configuration
+    product_acos = st.session_state.get('client_config', {}).get('product_acos', 20.0)
     
     # Calculate hypothetical ACOS
     calculator = HypotheticalACOSCalculator()
-    df_products_enriched = calculator.enrich_dataframe_with_hypothetical_acos(df_products, target_acos)
+    df_products_enriched = calculator.enrich_dataframe_with_hypothetical_acos(df_products, product_acos)
     
     st.success(f"📦 **{len(df_products_enriched)} Produkte** gefunden")
     
@@ -838,6 +871,298 @@ def render_products_tab():
     - **✅ Ja**: Hypothetischer ACOS wurde basierend auf Datenbankpreis berechnet und in ACOS-Spalte eingetragen
     - **❌ Nein**: Regulärer ACOS basierend auf tatsächlichen Verkäufen
     """)
+
+
+def render_export_tab(optimization_results: Dict[str, Any]):
+    """Render the Export tab with change explanations and export functionality"""
+    st.subheader("📤 Export")
+    
+    # Get configuration values for display
+    client_config = st.session_state.get('client_config', {})
+    keyword_acos = client_config.get('keyword_acos', 20.0)
+    product_acos = client_config.get('product_acos', 20.0)
+    max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
+    target_acos_placement = client_config.get('target_acos_placement', 20.0)
+    
+    # Show current configuration values being used
+    st.info(f"📊 **Aktuelle Konfiguration:** Keyword ACOS: {keyword_acos}% | Produkt ACOS: {product_acos}% | Max Klicks: {max_keyword_clicks} | Placement ACOS: {target_acos_placement}%")
+    
+    st.markdown("### 📋 Folgende Änderungen werden in der Excel-Datei vorgenommen:")
+    
+    # Show specific changes that will be made
+    with st.expander("🔧 **Platzierungs-Anpassungen (Gebotsanpassungen)**", expanded=True):
+        st.markdown(f"**Ziel-ACOS**: {target_acos_placement}% (aus Konfiguration)")
+        st.markdown(f"📊 **Aktuelle Konfiguration**: Ziel-ACOS für Gebotsanpassungen: {target_acos_placement}%")
+        
+        if 'placement_adjustments' in optimization_results:
+            placements = optimization_results['placement_adjustments']
+            placement_data = [p for p in placements if not p.get('is_total', False)]
+            
+            if placement_data:
+                st.info(f"🎯 **{len(placement_data)} Platzierungs-Anpassungen** werden vorgenommen:")
+                
+                # Show placement adjustments in a table
+                df_placements = pd.DataFrame(placement_data)
+                if not df_placements.empty:
+                    # Select relevant columns for display
+                    display_cols = ['campaign_id', 'placement', 'current_adjust_pct', 'recommended_adjust_pct']
+                    existing_cols = [col for col in display_cols if col in df_placements.columns]
+                    
+                    if existing_cols:
+                        df_display = df_placements[existing_cols].copy()
+                        
+                        # Rename columns to German
+                        column_mapping = {
+                            'campaign_id': 'Kampagnen-ID',
+                            'placement': 'Platzierung',
+                            'current_adjust_pct': 'Aktuell (%)',
+                            'recommended_adjust_pct': 'Neu (%)'
+                        }
+                        df_display = df_display.rename(columns=column_mapping)
+                        
+                        # Format the percentage columns
+                        if 'Aktuell (%)' in df_display.columns:
+                            df_display['Aktuell (%)'] = df_display['Aktuell (%)'].apply(
+                                lambda x: f"{x}%" if pd.notna(x) else "0%"
+                            )
+                        if 'Neu (%)' in df_display.columns:
+                            df_display['Neu (%)'] = df_display['Neu (%)'].apply(
+                                lambda x: f"{x}%" if pd.notna(x) else "0%"
+                            )
+                        
+                        st.dataframe(df_display, use_container_width=True)
+            else:
+                st.success("✅ Keine Platzierungs-Anpassungen erforderlich")
+        else:
+            st.info("ℹ️ Keine Platzierungsdaten verfügbar")
+    
+    with st.expander("🎯 **Keyword-Gebots-Updates (Basis-CPC)**"):
+        st.markdown(f"**Keywords erhalten die jeweiligen Basis-CPCs ihrer Kampagnen**")
+        st.markdown(f"📊 **Berechnung**: Basis-CPC = min_rpc × {target_acos_placement}% Ziel-ACOS")
+        
+        if 'placement_adjustments' in optimization_results:
+            placements = optimization_results['placement_adjustments']
+            # Get campaign base CPC values from totals rows
+            campaign_base_cpc = {}
+            for p in placements:
+                if p.get('is_total', False):
+                    campaign_id = p.get('campaign_id')
+                    base_cpc_total = p.get('base_cpc_total')
+                    if campaign_id and base_cpc_total is not None:
+                        campaign_base_cpc[campaign_id] = base_cpc_total
+            
+            if campaign_base_cpc:
+                st.info(f"🎯 **{len(campaign_base_cpc)} Kampagnen** haben Basis-CPC Werte für Keyword-Updates")
+                
+                # Create table showing campaign basis CPCs
+                cpc_data = []
+                for campaign_id, base_cpc in campaign_base_cpc.items():
+                    cpc_data.append({
+                        'Kampagnen-ID': campaign_id,
+                        'Basis-CPC': f"€{base_cpc:.2f}",
+                        'Anwendung': 'Alle Keywords + Produktanzeigen + Produkt-Targeting'
+                    })
+                
+                if cpc_data:
+                    df_cpc = pd.DataFrame(cpc_data)
+                    st.dataframe(df_cpc, use_container_width=True)
+                    
+                    st.markdown("**📝 Alle Keywords, Produktanzeigen und Produkt-Targeting** erhalten automatisch den Basis-CPC ihrer jeweiligen Kampagne")
+            else:
+                st.info("ℹ️ Keine Basis-CPC Werte verfügbar")
+        else:
+            st.info("ℹ️ Keine Platzierungsdaten für Basis-CPC Berechnung verfügbar")
+        
+    with st.expander("⏸️ **Keyword-Pausierung**"):
+        st.markdown(f"**Pausierungs-Kriterien**: ACOS >{keyword_acos:.1f}% oder ≥{max_keyword_clicks} Klicks ohne Conversion")
+        st.markdown(f"📊 **Aktuelle Konfiguration**: Keyword ACOS Limit: {keyword_acos}% | Max Klicks: {max_keyword_clicks}")
+        
+        # Analyze actual campaign keywords (not search terms) for pausing
+        campaign_keywords_to_pause = []
+        
+        if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
+            from app.utils.campaign_pauser import CampaignPauser
+            
+            df_campaign = st.session_state.df_campaign
+            
+            # Create a CampaignPauser instance to preview what would be paused
+            pauser = CampaignPauser()
+            
+            # Get preview of what would be paused without actually modifying the data
+            try:
+                preview_results = pauser.preview_pausing(df_campaign, client_config)
+                campaign_keywords_to_pause = preview_results.get('keywords_to_pause', [])
+            except Exception as e:
+                st.info(f"ℹ️ Keyword-Vorschau nicht verfügbar: {str(e)} - wird beim Export durchgeführt")
+                campaign_keywords_to_pause = []
+        
+        if campaign_keywords_to_pause:
+            st.warning(f"⏸️ **{len(campaign_keywords_to_pause)} Campaign Keywords** werden pausiert:")
+            
+            # Show keywords in a table
+            keywords_data = []
+            for kw in campaign_keywords_to_pause:
+                keyword = kw.get('keyword', 'Unbekannt')
+                clicks = kw.get('clicks', 0)
+                orders = kw.get('orders', 0)
+                acos = kw.get('acos', 0)
+                reason = kw.get('reason', 'Keine Angabe')
+                
+                # Format ACOS
+                if pd.notna(acos) and acos > 0:
+                    if acos <= 1:
+                        acos_display = f"{acos*100:.1f}%"
+                    else:
+                        acos_display = f"{acos:.1f}%"
+                else:
+                    acos_display = 'N/A'
+                
+                keywords_data.append({
+                    'Keyword': keyword,
+                    'Klicks': int(clicks) if pd.notna(clicks) else 'N/A',
+                    'Bestellungen': int(orders) if pd.notna(orders) else 'N/A',
+                    'ACOS': acos_display,
+                    'Grund': reason
+                })
+            
+            if keywords_data:
+                df_keywords = pd.DataFrame(keywords_data)
+                st.dataframe(df_keywords, use_container_width=True)
+                
+        else:
+            st.success("✅ Keine Campaign Keywords müssen pausiert werden")
+    
+    with st.expander("🛍️ **Produkt-Pausierung**"):
+        st.markdown(f"**ACOS-Grenzwert**: >{product_acos}% (inkl. hypothetischer ACOS)")
+        st.markdown(f"📊 **Aktuelle Konfiguration**: Produkt ACOS Limit: {product_acos}%")
+        
+        # Check if we have campaign data to analyze products  
+        if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
+            from app.utils.campaign_pauser import CampaignPauser
+            
+            df_campaign = st.session_state.df_campaign
+            pauser = CampaignPauser()
+            
+            # Get preview of what products would be paused
+            try:
+                preview_results = pauser.preview_pausing(df_campaign, client_config)
+                products_to_pause = preview_results.get('products_to_pause', [])
+                
+                if products_to_pause:
+                    st.warning(f"⏸️ **{len(products_to_pause)} Produkte** werden pausiert:")
+                    
+                    # Show products in a table
+                    products_data = []
+                    for prod in products_to_pause:
+                        products_data.append({
+                            'SKU': prod['sku'],
+                            'ACOS': f"{prod['acos']:.1f}%",
+                            'Grund': prod['reason']
+                        })
+                    
+                    if products_data:
+                        df_products = pd.DataFrame(products_data)
+                        st.dataframe(df_products, use_container_width=True)
+                else:
+                    st.success("✅ Keine Produkte müssen pausiert werden")
+                    
+            except Exception as e:
+                st.info(f"ℹ️ Produktpausierung wird beim Export durchgeführt (Vorschau nicht verfügbar: {str(e)})")
+        else:
+            st.info("ℹ️ Produktpausierung wird beim Export durchgeführt")
+    
+    st.markdown("### ⚠️ **Wichtige Hinweise:**")
+    st.markdown("""
+    - **Keywords erhalten Basis-CPC ihrer Kampagne** - basierend auf Platzierungs-Optimierung
+    - **Platzierungs-Anpassungen** werden für alle drei Placement-Typen optimiert
+    - **Keywords/Produkte werden pausiert** basierend auf intelligenter Analyse aus Konfiguration
+    - **Alle anderen Sheets** bleiben unverändert erhalten
+    - **Original-Datei** wird nicht überschrieben - eine neue Datei wird erstellt
+    """)
+    
+    # Export functionality
+    st.markdown("---")
+    st.markdown("### 💾 **Export starten:**")
+    
+    if st.button("📤 Export-Datei vorbereiten", type="primary"):
+        if not st.session_state.get('identified_original_keyword_column') or \
+           not st.session_state.get('identified_original_bid_target_column'):
+            st.error("Export nicht möglich: Original-Schlüsselwort oder Gebots-Spalten-Namen wurden während des Uploads nicht korrekt identifiziert. Bitte laden Sie erneut hoch.")
+        else:
+            with st.spinner("Export wird vorbereitet..."):
+                try:
+                    from app.utils.export_utils import generate_export_excel
+                    
+                    # Get all required data from session state
+                    temp_file = st.session_state.get('temp_upload_filepath')
+                    bid_changes = optimization_results.get("bid_changes", [])
+                    search_terms_sheet = st.session_state.get('search_terms_sheet_name', 'Search Terms')
+                    campaign_sheet = st.session_state.get('original_campaign_sheet_name', 'Campaign')
+                    keyword_col = st.session_state.get('identified_original_keyword_column', 'Keyword')
+                    bid_col = st.session_state.get('identified_original_bid_target_column', 'Bid')
+                    all_sheets = st.session_state.get('all_original_sheet_names', [])
+                    placement_changes = optimization_results.get('placement_adjustments', [])
+                    
+                    # Keep all placement changes including totals (needed for Base CPC extraction)
+                    placement_changes_filtered = placement_changes
+                    
+                    current_target_acos = None
+                    if 'placement_target_acos_slider' in st.session_state:
+                        current_target_acos = st.session_state.placement_target_acos_slider / 100
+                    else:
+                        # Fall back to client config
+                        current_target_acos = float(client_config.get('target_acos_placement', 20.0)) / 100
+                    
+                    # Recompute placement adjustments with current ACOS if needed
+                    if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
+                        from app.utils.placement_adjuster import compute_placement_adjustments
+                        placement_changes_filtered = compute_placement_adjustments(
+                            st.session_state.df_campaign, 
+                            target_acos=current_target_acos
+                        )
+                        # Filter out totals again
+                        placement_changes_filtered = [p for p in placement_changes_filtered if not p.get('is_total', False)]
+                    
+                    # Debug: Show what config is being passed to export
+                    st.info(f"🔧 **Übergabe an Export:** {client_config}")
+                    
+                    # Generate export file
+                    export_buffer = generate_export_excel(
+                        original_excel_path=temp_file,
+                        bid_changes=bid_changes,
+                        search_terms_sheet_name=search_terms_sheet,
+                        keyword_match_col_original_name=keyword_col,
+                        bid_update_col_original_name=bid_col,
+                        campaign_sheet_name=campaign_sheet,
+                        all_original_sheet_names=all_sheets,
+                        placement_changes=placement_changes_filtered,
+                        client_config=client_config
+                    )
+                    
+                    if export_buffer:
+                        # Store in session state for download
+                        st.session_state.export_buffer = export_buffer
+                        st.session_state.export_ready = True
+                        st.success("✅ Export erfolgreich vorbereitet! Download ist bereit.")
+                    else:
+                        st.error("❌ Export fehlgeschlagen. Bitte versuchen Sie es erneut.")
+                        
+                except Exception as e:
+                    st.error(f"❌ Export-Fehler: {str(e)}")
+                    import traceback
+                    with st.expander("🔍 Fehler-Details"):
+                        st.code(traceback.format_exc())
+    
+    # Show download button if export is ready
+    if st.session_state.get('export_ready', False) and st.session_state.get('export_buffer'):
+        st.success("✅ Export bereit!")
+        st.download_button(
+            label="📥 Excel-Datei herunterladen",
+            data=st.session_state.export_buffer.getvalue(),
+            file_name="Amazon_PPC_Optimized.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="export_download_button_persistent"
+        )
 
 
 def render_recommendations_tab(recommendations):

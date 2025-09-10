@@ -15,8 +15,10 @@ def generate_export_excel(original_excel_path: str,
     """
     Generates an Excel file in memory with placement adjustments and Base CPC updates.
     
-    NOTE: Keyword bid updates have been disabled per user request.
-    Only placement (Platzierung) adjustments and Base CPC updates will be applied to the exported file.
+    Features:
+    - Placement (Platzierung) adjustments for all three placement types
+    - Base CPC updates for Keywords and Product Targeting based on targeting type
+    - Intelligent keyword and product pausing based on configuration thresholds
 
     Args:
         original_excel_path (str): Path to the originally uploaded Excel file.
@@ -27,6 +29,7 @@ def generate_export_excel(original_excel_path: str,
         campaign_sheet_name (str, required): Original name of the campaign sheet where changes are made.
         all_original_sheet_names (list, optional): List of all original sheet names to preserve order and other sheets.
         placement_changes (list, optional): List of placement adjustment changes to apply.
+        client_config (dict, optional): Client configuration with thresholds for pausing.
 
     Returns:
         BytesIO: Buffer containing the new Excel file with placement adjustments and Base CPC updates, or None on failure.
@@ -79,8 +82,8 @@ def generate_export_excel(original_excel_path: str,
         )
 
         # Remove any leftover literal "nan" / "None" strings that might already exist
-        df_to_update[keyword_match_col_original_name].replace(
-            to_replace=["nan", "NaN", "None"], value="", inplace=True
+        df_to_update[keyword_match_col_original_name] = df_to_update[keyword_match_col_original_name].replace(
+            to_replace=["nan", "NaN", "None"], value=""
         )
         
         # Prepare bid update column to accept numeric data, preserving existing numbers
@@ -90,6 +93,9 @@ def generate_export_excel(original_excel_path: str,
         # If not present, insert it as the third column (index 2) and default to empty strings.
         if 'Operation' not in df_to_update.columns:
             df_to_update.insert(2, 'Operation', '')
+        else:
+            # Ensure Operation column can accept string values
+            df_to_update['Operation'] = df_to_update['Operation'].astype('object')
 
         updated_keywords_count = 0
         updated_placements_count = 0
@@ -137,6 +143,9 @@ def generate_export_excel(original_excel_path: str,
                     idxs = df_to_update[mask_pl].index
                     if not idxs.empty:
                         df_to_update.loc[idxs, 'Prozentsatz'] = new_pct_val
+                        # Ensure Operation column accepts string values before setting
+                        if df_to_update['Operation'].dtype != 'object':
+                            df_to_update['Operation'] = df_to_update['Operation'].astype('object')
                         df_to_update.loc[idxs, 'Operation'] = 'Update'
                         updated_placements_count += len(idxs)
 
@@ -218,6 +227,9 @@ def generate_export_excel(original_excel_path: str,
                             base_cpc_rounded = round(base_cpc_numeric, 2)
                             for bid_col in bid_cols_to_update:
                                 df_to_update.loc[idxs, bid_col] = base_cpc_rounded
+                            # Ensure Operation column accepts string values before setting
+                            if df_to_update['Operation'].dtype != 'object':
+                                df_to_update['Operation'] = df_to_update['Operation'].astype('object')
                             df_to_update.loc[idxs, 'Operation'] = 'Update'
                             updated_base_cpc_count += len(idxs)
             
@@ -238,6 +250,7 @@ def generate_export_excel(original_excel_path: str,
         if client_config:
             try:
                 st.info("🔍 Checking for keywords and products to pause based on thresholds...")
+                st.info(f"🔧 **Export verwendet Konfiguration:** {client_config}")
                 pauser = CampaignPauser()
                 df_to_update, pause_summary = pauser.process_campaign_sheet(df_to_update, client_config)
                 

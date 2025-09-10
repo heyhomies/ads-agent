@@ -85,8 +85,8 @@ def analyze_keywords(state: PPCState) -> PPCState:
             df_search_terms[col] = pd.to_numeric(df_search_terms[col], errors='coerce')
     
     # Apply keyword rules
-    # Rule 1: Pause keywords with ≥ 25 clicks and no conversions
-    clicks_threshold = client_config.get('keywords_min_clicks', 25)
+    # Rule 1: Pause keywords with max clicks and no conversions
+    clicks_threshold = client_config.get('max_keyword_clicks', 50)
     mask_no_conversion = (df_search_terms['clicks'] >= clicks_threshold) & (df_search_terms['orders'] == 0)
     for _, row in df_search_terms[mask_no_conversion].iterrows():
         # Use 'customer_search_term' for reporting and 'keyword' for bidding
@@ -101,15 +101,14 @@ def analyze_keywords(state: PPCState) -> PPCState:
             'original_data': {k: v for k, v in row.items() if k in ['clicks', 'orders', 'acos', 'conversion_rate']}
         })
     
-    # Rule 2: Pause keywords with ACOS > target and CR < 10%
-    min_conversion_rate = client_config.get('min_conversion_rate', 10.0) / 100  # Convert to decimal
+    # Rule 2: Pause keywords with high ACOS
+    keyword_acos_threshold = client_config.get('keyword_acos', 20.0) / 100  # Convert to decimal
     # Handle NaN values properly in the comparison
-    mask_high_acos_low_cr = (
+    mask_high_acos = (
         (~pd.isna(df_search_terms['acos'])) & 
-        (df_search_terms['acos'] > target_acos) & 
-        ((pd.isna(df_search_terms['conversion_rate'])) | (df_search_terms['conversion_rate'] < min_conversion_rate))
+        (df_search_terms['acos'] > keyword_acos_threshold)
     )
-    for _, row in df_search_terms[mask_high_acos_low_cr].iterrows():
+    for _, row in df_search_terms[mask_high_acos].iterrows():
         # Skip if already flagged for change
         keyword = row['keyword'] if 'keyword' in row else row['search_term']
         if any(change['keyword'] == keyword for change in keyword_changes):
@@ -126,14 +125,14 @@ def analyze_keywords(state: PPCState) -> PPCState:
             'keyword': keyword,
             'customer_search_term': search_term,
             'action': 'pause',
-            'reason': f"High ACOS ({acos_display}) and low conversion rate ({cr_display})",
+            'reason': f"High ACOS ({acos_display}) above threshold ({keyword_acos_threshold*100:.1f}%)",
             'original_data': {k: v for k, v in row.items() if k in ['clicks', 'orders', 'acos', 'conversion_rate']}
         })
     
-    # Rule 3: Keep keywords with ACOS ≤ target AND CR ≥ min_conversion_rate
+    # Rule 3: Keep keywords with good ACOS
     mask_keep = (
-        (~pd.isna(df_search_terms['acos']) & (df_search_terms['acos'] <= target_acos)) & 
-        (~pd.isna(df_search_terms['conversion_rate']) & (df_search_terms['conversion_rate'] >= min_conversion_rate))
+        (~pd.isna(df_search_terms['acos'])) & 
+        (df_search_terms['acos'] <= keyword_acos_threshold)
     )
     for _, row in df_search_terms[mask_keep].iterrows():
         # Skip if already flagged for change

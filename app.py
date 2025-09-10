@@ -130,8 +130,10 @@ def main():
                     if st.button("Optimierung starten"):
                         with st.spinner("Optimierungsregeln anwenden..."):
                             client_config = st.session_state.get('client_config', {
-                                'is_market_leader': False, 'has_large_inventory': False,
-                                'target_acos': 20.0, 'client_name': 'Default Client'
+                                'keyword_acos': 20.0, 
+                                'product_acos': 20.0,
+                                'target_acos_placement': 20.0,
+                                'max_keyword_clicks': 50
                             })
                             try:
                                 optimization_results = apply_optimization_rules(
@@ -154,9 +156,11 @@ def main():
                                     st.session_state.df_campaign = optimization_results['df_campaign_with_hypothetical']
                                 # --- NEW: Calculate placement bid adjustments ---
                                 try:
+                                    # Use the new unified configuration key for placement target ACOS
+                                    placement_target_acos = client_config.get('target_acos_placement', 20.0)
                                     placement_adjustments = compute_placement_adjustments(
                                         st.session_state.df_campaign,
-                                        target_acos=float(client_config.get('target_acos', 20.0)) / 100 if client_config.get('target_acos', 20.0) > 1 else float(client_config.get('target_acos', 0.20))
+                                        target_acos=placement_target_acos / 100
                                     )
                                 except Exception as e:
                                     placement_adjustments = []
@@ -165,7 +169,7 @@ def main():
 
                                 # Keyword classification
                                 from app.utils.keyword_classifier import classify_keywords
-                                keyword_perf = classify_keywords(st.session_state.df_campaign, target_acos=float(client_config.get('target_acos',20))/100)
+                                keyword_perf = classify_keywords(st.session_state.df_campaign, target_acos=float(client_config.get('keyword_acos',20))/100)
                                 optimization_results['keyword_performance'] = keyword_perf
                                 st.session_state.optimization_results = optimization_results
                                 st.success("Optimierung erfolgreich abgeschlossen!")
@@ -188,64 +192,83 @@ def main():
         render_configuration()
     
     elif active_page == "Dashboard":
+        # Check if we need to recalculate due to config changes
+        need_recalculation = False
+        
+        if 'optimization_results' not in st.session_state:
+            need_recalculation = True
+            
+        # Check if all required data exists for recalculation
+        has_data = (
+            'df_campaign' in st.session_state and 
+            st.session_state.df_campaign is not None and
+            not st.session_state.df_campaign.empty
+        )
+        
+        if need_recalculation and has_data:
+            st.info("🔄 **Konfiguration wurde geändert - Berechnungen werden aktualisiert...**")
+            
+            with st.spinner("Neuberechnung mit aktueller Konfiguration..."):
+                try:
+                    client_config = st.session_state.get('client_config', {
+                        'keyword_acos': 20.0, 
+                        'product_acos': 20.0,
+                        'target_acos_placement': 20.0,
+                        'max_keyword_clicks': 50
+                    })
+                    
+                    # Recalculate optimization results
+                    optimization_results = apply_optimization_rules(
+                        st.session_state.df_campaign, 
+                        st.session_state.get('df_search_terms', pd.DataFrame()),
+                        client_config
+                    )
+                    
+                    # Add hypothetical ACOS calculations
+                    from app.utils.hypothetical_acos import add_hypothetical_acos_to_optimization_results
+                    optimization_results = add_hypothetical_acos_to_optimization_results(
+                        optimization_results, 
+                        client_config.get('target_acos', 20.0)
+                    )
+                    
+                    # Update session state with enriched data
+                    if 'df_search_terms_with_hypothetical' in optimization_results:
+                        st.session_state.df_search_terms = optimization_results['df_search_terms_with_hypothetical']
+                    if 'df_campaign_with_hypothetical' in optimization_results:
+                        st.session_state.df_campaign = optimization_results['df_campaign_with_hypothetical']
+                        
+                    # Calculate placement bid adjustments
+                    placement_target_acos = client_config.get('target_acos_placement', 20.0)
+                    placement_adjustments = compute_placement_adjustments(
+                        st.session_state.df_campaign,
+                        target_acos=placement_target_acos / 100
+                    )
+                    optimization_results['placement_adjustments'] = placement_adjustments
+
+                    # Keyword classification
+                    from app.utils.keyword_classifier import classify_keywords
+                    keyword_perf = classify_keywords(st.session_state.df_campaign, target_acos=float(client_config.get('keyword_acos',20))/100)
+                    optimization_results['keyword_performance'] = keyword_perf
+                    
+                    st.session_state.optimization_results = optimization_results
+                    st.success("✅ Dashboard mit aktueller Konfiguration aktualisiert!")
+                    st.rerun()  # Refresh to show updated dashboard
+                    
+                except Exception as e:
+                    st.error(f"❌ Fehler bei der Neuberechnung: {str(e)}")
+                    import traceback
+                    st.code(traceback.format_exc())
+        
+        # Show dashboard if we have results
         if 'optimization_results' in st.session_state:
             render_dashboard(st.session_state.optimization_results)
-            
-            # Add Export Button here or within render_dashboard
-            if st.button("Export-Datei vorbereiten"):
-                if not st.session_state.get('identified_original_keyword_column') or \
-                   not st.session_state.get('identified_original_bid_target_column'):
-                    st.error("Export nicht möglich: Original-Schlüsselwort oder Gebots-Spalten-Namen wurden während des Uploads nicht korrekt identifiziert. Bitte laden Sie erneut hoch.")
-                else:
-                    with st.spinner("Export-Datei generieren..."):
-                        # Recalculate placement adjustments using current slider value from dashboard
-                        current_target_acos = None
-                        if 'placement_target_acos_slider' in st.session_state:
-                            current_target_acos = st.session_state.placement_target_acos_slider / 100
-                        else:
-                            # Fallback to client config if slider not used yet
-                            client_config = st.session_state.get('client_config', {})
-                            current_target_acos = float(client_config.get('target_acos', 20.0)) / 100
-                        
-                        # Recalculate placement adjustments with current target ACOS
-                        from app.utils.placement_adjuster import compute_placement_adjustments
-                        current_placement_adjustments = compute_placement_adjustments(
-                            st.session_state.df_campaign,
-                            target_acos=current_target_acos
-                        )
-                        
-                        export_file_bytes = generate_export_excel(
-                            original_excel_path=st.session_state.temp_upload_filepath,
-                            bid_changes=st.session_state.optimization_results.get('bid_changes', []),
-                            search_terms_sheet_name=st.session_state.original_search_terms_sheet_name,
-                            keyword_match_col_original_name=st.session_state.identified_original_keyword_column,
-                            bid_update_col_original_name=st.session_state.identified_original_bid_target_column,
-                            campaign_sheet_name=st.session_state.original_campaign_sheet_name,
-                            all_original_sheet_names=st.session_state.all_original_sheet_names,
-                            placement_changes=current_placement_adjustments,  # Use recalculated values
-                            client_config=st.session_state.get('client_config', {})  # Add client config for pausing
-                        )
-                        if export_file_bytes:
-                            st.session_state.export_file_bytes = export_file_bytes
-                            st.success("Export-Datei bereit für Download.")
-                        else:
-                            st.error("Export-Datei konnte nicht generiert werden.")
-            
-            if 'export_file_bytes' in st.session_state and st.session_state.export_file_bytes:
-                st.download_button(
-                    label="Aktualisierter Bericht herunterladen",
-                    data=st.session_state.export_file_bytes,
-                    file_name="optimized_amazon_report.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-                # Optionally clear after download to prevent re-downloading same data or to save memory
-                # del st.session_state.export_file_bytes
-
-        else:
+        elif not has_data:
             st.info("Bitte laden Sie zuerst einen Bericht hoch und optimieren, um das Dashboard zu sehen und Ergebnisse zu exportieren.")
             if st.button("Zur Upload-Seite"):
                 st.session_state.page = "Bericht hochladen"
                 st.rerun()
+        else:
+            st.error("Unerwarteter Zustand: Daten vorhanden, aber Berechnungen fehlgeschlagen.")
 
 if __name__ == "__main__":
     main() 
