@@ -11,7 +11,8 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
     For zero-sales placements with clicks, sales are adjusted to 1 Euro for meaningful RPC calculations.
     
     SPECIAL RULE: If Top-Platzierung has <20 clicks:
-    - Apply +100% increase to Top-Platzierung only
+    - Apply +100 percentage points increase to Top-Platzierung only
+    - Base CPC determined from "Standardgebot für die Anzeigengruppe" of "Anzeigengruppe" entity
     - Keep other placements unchanged
     - Cap max bid at €1.50 (scale percentage down if needed)
     - No RPC-based optimization for these campaigns
@@ -90,26 +91,51 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
             # *** SPECIAL RULE INFO DISPLAYED RIGHT UNDER CAMPAIGN HEADLINE ***
             st.info(f"🎯 **SPEZIALREGEL ANGEWENDET für Campaign {campaign_id}**: Top-Platzierung hat nur {top_clicks} Klicks (<20)")
             
-            # *** IDENTIFY BASE CPC FROM KEYWORDS IN THIS CAMPAIGN ***
-            # Find keywords in this campaign to determine actual base CPC
-            campaign_keywords = df_campaign[
+            # *** IDENTIFY BASE CPC FROM ANZEIGENGRUPPE STANDARD BID ***
+            # Find Anzeigengruppe entity in this campaign to get standard bid
+            campaign_adgroups = df_campaign[
                 (df_campaign['kampagnen-id'] == campaign_id) & 
-                (df_campaign['entität'].astype(str).str.lower() == 'keyword')
+                (df_campaign['entität'].astype(str).str.lower() == 'anzeigengruppe')
             ]
             
-            # Calculate base CPC from keyword bids in this campaign
-            if not campaign_keywords.empty and 'gebot' in campaign_keywords.columns:
-                # Use actual keyword bids as base CPC reference
-                keyword_bids = campaign_keywords['gebot'].dropna()
-                if not keyword_bids.empty:
-                    base_cpc_from_keywords = keyword_bids.mean()  # Average of keyword bids
-                    st.info(f"   💰 **Base CPC ermittelt aus Keywords**: €{base_cpc_from_keywords:.2f} (Durchschnitt von {len(keyword_bids)} Keywords)")
+            # Get base CPC from "Standardgebot für die Anzeigengruppe" 
+            if not campaign_adgroups.empty:
+                # Check for the standard bid column (try different possible names)
+                standard_bid_col = None
+                possible_columns = [
+                    'Standardgebot für die Anzeigengruppe',
+                    'standardgebot für die anzeigengruppe', 
+                    'Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)',
+                    'Standard bid for ad group'
+                ]
+                
+                for col_name in possible_columns:
+                    if col_name in campaign_adgroups.columns:
+                        standard_bid_col = col_name
+                        break
+                
+                if standard_bid_col:
+                    standard_bids = campaign_adgroups[standard_bid_col].dropna()
+                    if not standard_bids.empty and len(standard_bids) > 0:
+                        # Use the first non-null standard bid (should be consistent across ad groups)
+                        base_cpc_from_adgroup = standard_bids.iloc[0]
+                        try:
+                            base_cpc_from_adgroup = float(base_cpc_from_adgroup)
+                            st.info(f"   💰 **Base CPC aus Anzeigengruppe**: €{base_cpc_from_adgroup:.2f} ('{standard_bid_col}')")
+                        except (ValueError, TypeError):
+                            base_cpc_from_adgroup = 0.50
+                            st.warning(f"   ⚠️ Standardgebot '{standard_bids.iloc[0]}' nicht numerisch - verwende Default: €{base_cpc_from_adgroup:.2f}")
+                    else:
+                        base_cpc_from_adgroup = 0.50
+                        st.warning(f"   ⚠️ Standardgebot-Spalte '{standard_bid_col}' leer - verwende Default: €{base_cpc_from_adgroup:.2f}")
                 else:
-                    base_cpc_from_keywords = 0.50  # Default fallback
-                    st.warning(f"   ⚠️ Keine Keyword-Gebote gefunden - verwende Default Base CPC: €{base_cpc_from_keywords:.2f}")
+                    base_cpc_from_adgroup = 0.50
+                    available_cols = list(campaign_adgroups.columns)
+                    st.warning(f"   ⚠️ Standardgebot-Spalte nicht gefunden - verwende Default: €{base_cpc_from_adgroup:.2f}")
+                    st.info(f"   📋 Verfügbare Spalten: {available_cols[:5]}...")  # Show first 5 columns for debugging
             else:
-                base_cpc_from_keywords = 0.50  # Default fallback
-                st.warning(f"   ⚠️ Keine Keywords in Campaign {campaign_id} gefunden - verwende Default Base CPC: €{base_cpc_from_keywords:.2f}")
+                base_cpc_from_adgroup = 0.50
+                st.warning(f"   ⚠️ Keine Anzeigengruppe in Campaign {campaign_id} gefunden - verwende Default: €{base_cpc_from_adgroup:.2f}")
             
             # Special handling: Only increase Top-Platzierung by 100 percentage points
             for _, row in grp.iterrows():
@@ -121,8 +147,8 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                     target_increase = 100  # Start with 100 percentage points
                     recommended_pct = current_pct + target_increase
                     
-                    # Calculate what the max bid would be with base CPC from keywords
-                    potential_max_bid = base_cpc_from_keywords * (1 + recommended_pct / 100)
+                    # Calculate what the max bid would be with base CPC from ad group
+                    potential_max_bid = base_cpc_from_adgroup * (1 + recommended_pct / 100)
                     
                     # *** CHECK €1.50 LIMIT AND SCALE DOWN IF NECESSARY ***
                     max_bid_limit = 1.50
@@ -133,24 +159,24 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                         # Scale down the 100 percentage points to hit exactly €1.50
                         # Formula: €1.50 = base_cpc * (1 + new_increase / 100)
                         # Solve for new_increase: new_increase = (€1.50 / base_cpc - 1) * 100
-                        if base_cpc_from_keywords > 0:
-                            max_possible_pct = (max_bid_limit / base_cpc_from_keywords - 1) * 100
+                        if base_cpc_from_adgroup > 0:
+                            max_possible_pct = (max_bid_limit / base_cpc_from_adgroup - 1) * 100
                             actual_increase = max_possible_pct - current_pct  # How much we can actually increase
                             recommended_pct = current_pct + actual_increase
                             capped_bid = True
                             st.warning(f"   ⚠️ +100PP würde €{potential_max_bid:.2f} ergeben - auf +{actual_increase:.0f}PP skaliert für €1,50 Max-Gebot")
                     
-                    final_max_bid = base_cpc_from_keywords * (1 + recommended_pct / 100)
+                    final_max_bid = base_cpc_from_adgroup * (1 + recommended_pct / 100)
                     
                     recommendations.append({
                         'campaign_id': campaign_id,
                         'placement': placement_label,
                         'current_adjust_pct': current_pct,
                         'recommended_adjust_pct': round(recommended_pct),
-                        'cpc': base_cpc_from_keywords,  # Use base CPC from keywords
+                        'cpc': base_cpc_from_adgroup,  # Use base CPC from ad group
                         'rpc': row['rpc'] if row['rpc'] != float('inf') else None,
                         'min_rpc': None,  # Not applicable for this rule
-                        'base_cpc': base_cpc_from_keywords,  # Base CPC from keywords
+                        'base_cpc': base_cpc_from_adgroup,  # Base CPC from ad group
                         'clicks': row['clicks'],
                         'spend': row['spend'],
                         'sales': row['sales'],
@@ -175,10 +201,10 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                         'placement': placement_label,
                         'current_adjust_pct': current_pct,
                         'recommended_adjust_pct': current_pct,  # No change
-                        'cpc': base_cpc_from_keywords,  # Use same base CPC
+                        'cpc': base_cpc_from_adgroup,  # Use same base CPC
                         'rpc': row['rpc'] if row['rpc'] != float('inf') else None,
                         'min_rpc': None,
-                        'base_cpc': base_cpc_from_keywords,  # Same base CPC
+                        'base_cpc': base_cpc_from_adgroup,  # Same base CPC
                         'clicks': row['clicks'],
                         'spend': row['spend'],
                         'sales': row['sales'],
@@ -208,7 +234,7 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 'sales': round(total_sales, 2),
                 'is_total': True,
                 'special_rule': 'low_top_clicks',
-                'base_cpc_total': base_cpc_from_keywords  # Use actual base CPC from keywords
+                'base_cpc_total': base_cpc_from_adgroup  # Use actual base CPC from ad group
             })
             
             continue  # Skip normal processing for this campaign
