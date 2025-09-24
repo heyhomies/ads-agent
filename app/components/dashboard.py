@@ -464,14 +464,59 @@ def render_placement_adjustments_tab(initial_adjustments):
         with st.container():
             st.markdown(f"### Kampagne **{campaign_id}**")
 
+            # *** CHECK FOR SPECIAL RULE AND DISPLAY INFORMATION ***
+            special_rule_applied = grp['special_rule'].eq('low_top_clicks').any() if 'special_rule' in grp.columns else False
+            
+            if special_rule_applied:
+                # Get special rule details from the group
+                top_placement_row = grp[grp['placement'].str.contains('Top', case=False, na=False)]
+                if not top_placement_row.empty:
+                    # Get the details from the top placement row
+                    special_row = top_placement_row.iloc[0]
+                    current_pct = special_row.get('current_adjust_pct', 0)
+                    recommended_pct = special_row.get('recommended_adjust_pct', 0)
+                    bid_capped = special_row.get('bid_capped', False)
+                    new_max_bid = special_row.get('new_max_bid', 0)
+                    actual_increase = special_row.get('actual_increase', 0)
+                    
+                    # Get base CPC info
+                    base_cpc = special_row.get('base_cpc', 0.50)
+                    
+                    # Display special rule information
+                    st.info(f"🎯 **SPEZIALREGEL ANGEWENDET für Campaign {campaign_id}**: Top-Platzierung hat <20 Klicks")
+                    
+                    # Check if we used default base CPC (indicating missing standard bid column)
+                    if base_cpc == 0.50:
+                        st.warning(f"   ⚠️ **Standardgebot-Spalte nicht gefunden** - verwende Default: €{base_cpc:.2f}")
+                        st.info(f"   🔍 **Gesuchte Spalten:** 'Standardgebot für die Anzeigengruppe', 'Standardgebot für die Anzeigengruppe (...)', etc.")
+                    else:
+                        st.info(f"   💰 **Base CPC aus Anzeigengruppe**: €{base_cpc:.2f}")
+                    
+                    # Show the adjustment logic
+                    if bid_capped:
+                        if actual_increase == 0:
+                            # Current percentage was already too high
+                            current_max_bid = base_cpc * (1 + current_pct / 100)
+                            st.warning(f"   ⚠️ **Aktuelle Anpassung {current_pct}% ergibt bereits €{current_max_bid:.2f}** - auf {recommended_pct:.0f}% reduziert für €1,50 Max-Gebot")
+                            st.info(f"   📋 **Keine +100PP möglich** - Anpassung muss auf Maximum für €1,50 begrenzt werden")
+                            st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {recommended_pct:.0f}% (auf Maximum reduziert) | Max-Gebot: €{new_max_bid:.2f}")
+                        else:
+                            # +100PP was too much - scaled down
+                            potential_max_bid = base_cpc * (1 + (current_pct + 100) / 100)
+                            st.warning(f"   ⚠️ +100PP würde €{potential_max_bid:.2f} ergeben - auf +{actual_increase:.0f}PP skaliert für €1,50 Max-Gebot")
+                            st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {recommended_pct:.0f}% (+{actual_increase:.0f}PP skaliert) | Max-Gebot: €{new_max_bid:.2f}")
+                    else:
+                        # Normal +100PP application
+                        st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {recommended_pct:.0f}% (+{actual_increase:.0f}PP) | Max-Gebot: €{new_max_bid:.2f}")
+
             total_row = grp[grp['is_total'] == True].iloc[0] if not grp[grp['is_total'] == True].empty else None
 
-            # Check if this is a zero sales campaign and show warning
-            if total_row is not None and total_row.get('is_zero_sales', False):
+            # Check if this is a zero sales campaign and show warning (only for non-special rule campaigns)
+            if not special_rule_applied and total_row is not None and total_row.get('is_zero_sales', False):
                 st.info("ℹ️ **Hinweis**: Diese Kampagne hat 0€ Umsatz. Verkäufe wurden für Berechnungen auf 1€ gesetzt.")
             
-            # Check if scaling was applied and show scaling info
-            if total_row is not None and total_row.get('scaling_applied', False):
+            # Check if scaling was applied and show scaling info (only for normal campaigns)
+            if not special_rule_applied and total_row is not None and total_row.get('scaling_applied', False):
                 integer_multiplier = total_row.get('integer_multiplier', 1)
                 st.warning(f"⚖️ **Skalierung angewendet**: Anpassungen überschritten 900%. "
                           f"Basis-CPC wurde um {integer_multiplier}x erhöht, "
