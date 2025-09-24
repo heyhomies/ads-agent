@@ -8,11 +8,20 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
     """Compute bid adjustment recommendations for placement rows (Gebotsanpassung) in the campaign sheet.
 
     For zero-sales placements with clicks, sales are adjusted to 1 Euro for meaningful RPC calculations.
-    If any placement adjustment exceeds 900% (Amazon's maximum), the system automatically scales:
-    - Base CPC is increased by an INTEGER multiplier (calculated as int(max_percentage/900) + 1)
-    - All placement percentages are reduced proportionally (maintaining relative differences)
-    - Maximum percentage is capped at exactly 900%
-    - No percentage goes below 0%
+    
+    SPECIAL RULE: If Top-Platzierung has <20 clicks:
+    - Apply +100% increase to Top-Platzierung only
+    - Keep other placements unchanged
+    - Cap max bid at €1.50 (scale percentage down if needed)
+    - No RPC-based optimization for these campaigns
+    
+    NORMAL PROCESSING: If Top-Platzierung has ≥20 clicks:
+    - Standard RPC-based optimization
+    - If any placement adjustment exceeds 900% (Amazon's maximum), the system automatically scales:
+      - Base CPC is increased by an INTEGER multiplier (calculated as int(max_percentage/900) + 1)
+      - All placement percentages are reduced proportionally (maintaining relative differences)
+      - Maximum percentage is capped at exactly 900%
+      - No percentage goes below 0%
 
     Args:
         df_campaign (pd.DataFrame): The processed campaign dataframe from `process_amazon_report`.
@@ -66,6 +75,113 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
 
     # Group by campaign ID
     for campaign_id, grp in df_place.groupby('kampagnen-id'):
+        # NEW RULE: Check if Top-Platzierung has less than 20 clicks
+        top_placement_row = grp[grp['placement_key'] == 'top-platzierung']
+        low_top_clicks = False
+        
+        if not top_placement_row.empty:
+            top_clicks = top_placement_row['clicks'].iloc[0]
+            if top_clicks < 20:
+                low_top_clicks = True
+                st.info(f"🔍 **Campaign {campaign_id}**: Top-Platzierung hat nur {top_clicks} Klicks (<20) - Spezielle Regel wird angewendet")
+        
+        # Apply special rule for campaigns with low Top-Placement clicks
+        if low_top_clicks:
+            # Special handling: Only increase Top-Platzierung by 100%
+            for _, row in grp.iterrows():
+                placement_label = row['platzierung']
+                current_pct = row['prozentsatz']
+                current_cpc = row.get('cpc', row['calc_cpc'])
+                
+                if row['placement_key'] == 'top-platzierung':
+                    # Increase Top-Platzierung by 100%
+                    recommended_pct = current_pct + 100
+                    new_max_bid = current_cpc * (1 + recommended_pct / 100)
+                    
+                    # Check if new max bid exceeds €1.50 limit
+                    max_bid_limit = 1.50
+                    capped_bid = False
+                    
+                    if new_max_bid > max_bid_limit:
+                        # Scale down percentage so max bid = €1.50
+                        # Formula: €1.50 = current_cpc * (1 + new_pct / 100)
+                        # Solve for new_pct: new_pct = (€1.50 / current_cpc - 1) * 100
+                        if current_cpc > 0:
+                            recommended_pct = round((max_bid_limit / current_cpc - 1) * 100)
+                            new_max_bid = max_bid_limit
+                            capped_bid = True
+                            st.warning(f"   ⚠️ Max-Gebot würde €{current_cpc * (1 + (current_pct + 100) / 100):.2f} betragen - auf €1,50 begrenzt")
+                    
+                    recommendations.append({
+                        'campaign_id': campaign_id,
+                        'placement': placement_label,
+                        'current_adjust_pct': current_pct,
+                        'recommended_adjust_pct': recommended_pct,
+                        'cpc': current_cpc,
+                        'rpc': row['rpc'] if row['rpc'] != float('inf') else None,
+                        'min_rpc': None,  # Not applicable for this rule
+                        'base_cpc': current_cpc,  # Keep same base CPC
+                        'clicks': row['clicks'],
+                        'spend': row['spend'],
+                        'sales': row['sales'],
+                        'is_total': False,
+                        'is_zero_sales': False,
+                        'scaling_applied': capped_bid,
+                        'special_rule': 'low_top_clicks',
+                        'new_max_bid': round(new_max_bid, 2),
+                        'bid_capped': capped_bid
+                    })
+                    
+                    if capped_bid:
+                        st.info(f"   📊 Top-Platzierung: {current_pct}% → {recommended_pct}% (angepasst) | Max-Gebot begrenzt auf: €{new_max_bid:.2f}")
+                    else:
+                        st.info(f"   📊 Top-Platzierung: {current_pct}% → {recommended_pct}% | Neues Max-Gebot: €{new_max_bid:.2f}")
+                else:
+                    # Keep other placements unchanged
+                    recommendations.append({
+                        'campaign_id': campaign_id,
+                        'placement': placement_label,
+                        'current_adjust_pct': current_pct,
+                        'recommended_adjust_pct': current_pct,  # No change
+                        'cpc': current_cpc,
+                        'rpc': row['rpc'] if row['rpc'] != float('inf') else None,
+                        'min_rpc': None,
+                        'base_cpc': current_cpc,  # Keep same
+                        'clicks': row['clicks'],
+                        'spend': row['spend'],
+                        'sales': row['sales'],
+                        'is_total': False,
+                        'is_zero_sales': False,
+                        'scaling_applied': False,
+                        'special_rule': 'low_top_clicks'
+                    })
+            
+            # Add totals row for special rule campaigns
+            total_clicks = grp['clicks'].sum()
+            total_spend = grp['spend'].sum()
+            total_sales = grp['sales'].sum()
+            
+            recommendations.append({
+                'campaign_id': campaign_id,
+                'placement': 'Gesamt',
+                'current_adjust_pct': None,
+                'recommended_adjust_pct': None,
+                'cpc': None,
+                'current_acos': None,
+                'rpc': None,
+                'min_rpc': None,
+                'base_cpc': None,
+                'clicks': total_clicks,
+                'spend': round(total_spend, 2),
+                'sales': round(total_sales, 2),
+                'is_total': True,
+                'special_rule': 'low_top_clicks',
+                'base_cpc_total': None  # No base CPC change for special rule
+            })
+            
+            continue  # Skip normal processing for this campaign
+        
+        # NORMAL PROCESSING: Campaign has sufficient Top-Placement clicks (≥20)
         # Determine min RPC among available placements
         valid_rpc = grp['rpc'].replace([float('inf')], pd.NA).dropna()
         if valid_rpc.empty:

@@ -113,6 +113,11 @@ def generate_export_excel(original_excel_path: str,
                     camp_id = pl_change.get('campaign_id')
                     placement_label = pl_change.get('placement')
                     new_pct = pl_change.get('recommended_adjust_pct')
+                    
+                    # Check if this is a special rule application
+                    special_rule = pl_change.get('special_rule')
+                    bid_capped = pl_change.get('bid_capped', False)
+                    new_max_bid = pl_change.get('new_max_bid')
             
                     try:
                         new_pct_val = float(new_pct)
@@ -148,6 +153,15 @@ def generate_export_excel(original_excel_path: str,
                             df_to_update['Operation'] = df_to_update['Operation'].astype('object')
                         df_to_update.loc[idxs, 'Operation'] = 'Update'
                         updated_placements_count += len(idxs)
+                        
+                        # Show special rule info in export
+                        if special_rule == 'low_top_clicks':
+                            if bid_capped and new_max_bid:
+                                st.success(f"   🎯 **Spezialregel angewendet:** Campaign {camp_id} {placement_label}: {new_pct_val}% (Max-Gebot auf €{new_max_bid:.2f} begrenzt)")
+                            elif placement_label == 'Top-Platzierung':
+                                st.success(f"   🎯 **Spezialregel angewendet:** Campaign {camp_id} {placement_label}: {new_pct_val}% (+100% für <20 Klicks)")
+                        else:
+                            st.success(f"   ✅ Campaign {camp_id} {placement_label}: {new_pct_val}% angewendet")
 
         # ------------------- Apply Base CPC updates ----------------------------
         # Update Base CPC for keyword and product targeting rows based on campaign placement adjustments

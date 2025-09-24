@@ -819,6 +819,11 @@ def render_export_tab(optimization_results: Dict[str, Any]):
         st.markdown(f"**Ziel-ACOS**: {target_acos_placement}% (aus Konfiguration)")
         st.markdown(f"📊 **Aktuelle Konfiguration**: Ziel-ACOS für Gebotsanpassungen: {target_acos_placement}%")
         
+        st.markdown("### 🎯 **Spezialregel für wenig Traffic:**")
+        st.markdown("• **Bedingung**: Top-Platzierung < 20 Klicks")
+        st.markdown("• **Aktion**: Nur Top-Platzierung +100% (andere bleiben unverändert)")
+        st.markdown("• **Max-Gebot-Schutz**: Automatische Begrenzung auf €1,50")
+        
         if 'placement_adjustments' in optimization_results:
             placements = optimization_results['placement_adjustments']
             placement_data = [p for p in placements if not p.get('is_total', False)]
@@ -845,6 +850,18 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                         }
                         df_display = df_display.rename(columns=column_mapping)
                         
+                        # Add special rule indicator
+                        if 'special_rule' in df_placements.columns:
+                            df_display['Spezialregel'] = df_placements['special_rule'].apply(
+                                lambda x: "🎯 <20 Klicks" if x == 'low_top_clicks' else ""
+                            )
+                        
+                        # Add bid capping indicator
+                        if 'bid_capped' in df_placements.columns:
+                            df_display['Max-Gebot begrenzt'] = df_placements['bid_capped'].apply(
+                                lambda x: "💰 €1,50" if x else ""
+                            )
+                        
                         # Format the percentage columns
                         if 'Aktuell (%)' in df_display.columns:
                             df_display['Aktuell (%)'] = df_display['Aktuell (%)'].apply(
@@ -856,6 +873,15 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                             )
                         
                         st.dataframe(df_display, use_container_width=True)
+                        
+                        # Show special rule summary
+                        special_rule_count = df_placements.get('special_rule', pd.Series()).eq('low_top_clicks').sum()
+                        capped_count = df_placements.get('bid_capped', pd.Series()).eq(True).sum()
+                        
+                        if special_rule_count > 0:
+                            st.info(f"🎯 **{special_rule_count} Platzierungen** verwenden Spezialregel für <20 Klicks")
+                        if capped_count > 0:
+                            st.warning(f"💰 **{capped_count} Max-Gebote** wurden auf €1,50 begrenzt")
             else:
                 st.success("✅ Keine Platzierungs-Anpassungen erforderlich")
         else:
@@ -1006,6 +1032,8 @@ def render_export_tab(optimization_results: Dict[str, Any]):
     st.markdown("""
     - **Keywords erhalten Basis-CPC ihrer Kampagne** - basierend auf Platzierungs-Optimierung
     - **Platzierungs-Anpassungen** werden für alle drei Placement-Typen optimiert
+    - **Spezialregel**: Kampagnen mit <20 Klicks Top-Platzierung bekommen nur +100% Top-Placement-Erhöhung
+    - **Max-Gebot-Schutz**: Automatische Begrenzung auf €1,50 bei Spezialregel
     - **Keywords/Produkte werden pausiert** basierend auf intelligenter Analyse aus Konfiguration
     - **Alle anderen Sheets** bleiben unverändert erhalten
     - **Original-Datei** wird nicht überschrieben - eine neue Datei wird erstellt

@@ -6,7 +6,6 @@ Connects to PostgreSQL database and retrieves data from tables.
 
 import os
 import pandas as pd
-from dotenv import load_dotenv
 from typing import List, Dict, Any, Optional
 
 try:
@@ -18,8 +17,7 @@ except ImportError:
 
 class PostgreSQLRetriever:
     def __init__(self):
-        # Load environment variables
-        load_dotenv()
+        # Database connection uses environment variables or defaults
         
         # Database connection parameters
         self.host = os.getenv('HOST', 'db.guiggfyirxppckrqrrwa.supabase.co')
