@@ -131,8 +131,9 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 else:
                     base_cpc_from_adgroup = 0.50
                     available_cols = list(campaign_adgroups.columns)
-                    st.warning(f"   ⚠️ Standardgebot-Spalte nicht gefunden - verwende Default: €{base_cpc_from_adgroup:.2f}")
-                    st.info(f"   📋 Verfügbare Spalten: {available_cols[:5]}...")  # Show first 5 columns for debugging
+                    st.warning(f"   ⚠️ **Standardgebot-Spalte nicht gefunden** - verwende Default: €{base_cpc_from_adgroup:.2f}")
+                    st.info(f"   📋 **Verfügbare Spalten in Anzeigengruppe:** {', '.join(available_cols[:8])}...")  # Show first 8 columns
+                    st.info(f"   🔍 **Gesuchte Spalten:** 'Standardgebot für die Anzeigengruppe', 'Standardgebot für die Anzeigengruppe (...)', etc.")
             else:
                 base_cpc_from_adgroup = 0.50
                 st.warning(f"   ⚠️ Keine Anzeigengruppe in Campaign {campaign_id} gefunden - verwende Default: €{base_cpc_from_adgroup:.2f}")
@@ -155,10 +156,20 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                     capped_bid = False
                     actual_increase = target_increase  # Will be adjusted if needed
                     
-                    if potential_max_bid > max_bid_limit:
-                        # Scale down the 100 percentage points to hit exactly €1.50
-                        # Formula: €1.50 = base_cpc * (1 + new_increase / 100)
-                        # Solve for new_increase: new_increase = (€1.50 / base_cpc - 1) * 100
+                    # First, check if current percentage already exceeds €1.50 limit
+                    current_max_bid = base_cpc_from_adgroup * (1 + current_pct / 100)
+                    
+                    if current_max_bid > max_bid_limit:
+                        # Current percentage already too high - set to maximum that gives €1.50
+                        if base_cpc_from_adgroup > 0:
+                            max_possible_pct = (max_bid_limit / base_cpc_from_adgroup - 1) * 100
+                            recommended_pct = max_possible_pct
+                            actual_increase = 0  # No increase possible
+                            capped_bid = True
+                            st.warning(f"   ⚠️ **Aktuelle Anpassung {current_pct}% ergibt bereits €{current_max_bid:.2f}** - auf {recommended_pct:.0f}% reduziert für €1,50 Max-Gebot")
+                            st.info(f"   📋 **Keine +100PP möglich** - Anpassung muss auf Maximum für €1,50 begrenzt werden")
+                    elif potential_max_bid > max_bid_limit:
+                        # +100PP would exceed limit - scale down the increase
                         if base_cpc_from_adgroup > 0:
                             max_possible_pct = (max_bid_limit / base_cpc_from_adgroup - 1) * 100
                             actual_increase = max_possible_pct - current_pct  # How much we can actually increase
@@ -190,7 +201,12 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                     })
                     
                     if capped_bid:
-                        st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {round(recommended_pct)}% (+{round(actual_increase)}PP skaliert) | Max-Gebot: €{final_max_bid:.2f}")
+                        if actual_increase == 0:
+                            # Case 1: Current percentage was already too high - had to reduce it
+                            st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {round(recommended_pct)}% (auf Maximum reduziert) | Max-Gebot: €{final_max_bid:.2f}")
+                        else:
+                            # Case 2: +100PP was too much - scaled down the increase
+                            st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {round(recommended_pct)}% (+{round(actual_increase)}PP skaliert) | Max-Gebot: €{final_max_bid:.2f}")
                     else:
                         st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {round(recommended_pct)}% (+{round(actual_increase)}PP) | Max-Gebot: €{final_max_bid:.2f}")
                         
