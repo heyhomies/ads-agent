@@ -2,6 +2,7 @@ from typing import List, Dict
 import pandas as pd
 import numpy as np
 import warnings
+import streamlit as st
 
 
 def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float = 0.20) -> List[Dict]:
