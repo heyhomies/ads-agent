@@ -160,7 +160,8 @@ def main():
                                     placement_target_acos = client_config.get('target_acos_placement', 20.0)
                                     placement_adjustments = compute_placement_adjustments(
                                         st.session_state.df_campaign,
-                                        target_acos=placement_target_acos / 100
+                                        target_acos=placement_target_acos / 100,
+                                        df_campaign_full=st.session_state.df_campaign
                                     )
                                 except Exception as e:
                                     placement_adjustments = []
@@ -241,7 +242,8 @@ def main():
                     placement_target_acos = client_config.get('target_acos_placement', 20.0)
                     placement_adjustments = compute_placement_adjustments(
                         st.session_state.df_campaign,
-                        target_acos=placement_target_acos / 100
+                        target_acos=placement_target_acos / 100,
+                        df_campaign_full=st.session_state.df_campaign
                     )
                     optimization_results['placement_adjustments'] = placement_adjustments
 

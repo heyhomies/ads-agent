@@ -448,7 +448,8 @@ def render_placement_adjustments_tab(initial_adjustments):
         df_campaign = st.session_state.df_campaign
         placement_adjustments = compute_placement_adjustments(
             df_campaign, 
-            target_acos=target_acos_pct / 100
+            target_acos=target_acos_pct / 100,
+            df_campaign_full=df_campaign  # Pass full dataframe for Base CPC lookup
         )
     else:
         placement_adjustments = initial_adjustments or []
@@ -526,7 +527,7 @@ def render_placement_adjustments_tab(initial_adjustments):
                         ("Klicks", f"{int(total_row['clicks'])}"),
                         ("Ausgaben", f"€{total_row['spend']:.2f}"),
                         ("Verkäufe", f"€{total_row['sales']:.2f}"),
-                        ("ACOS", f"{total_row['current_acos'] * 100:.1f}%" if total_row['current_acos'] < 10 else f"{total_row['current_acos']:.1f}%"),
+                        ("ACOS", f"{total_row['current_acos']:.1f}%"),
                         ("RPC gesamt", f"{total_row['total_rpc']:.4f}"),
                         ("Ziel-CPC", f"€{total_row['target_cpc']:.2f}"),
                         ("Basis-CPC", f"€{total_row['base_cpc_total']:.2f}"),
@@ -578,10 +579,10 @@ def render_placement_adjustments_tab(initial_adjustments):
             }
             df_display = df_display.rename(columns={k: v for k, v in rename_map.items() if k in df_display.columns})
             
-            # Format ACOS as percentage (convert from decimal to percentage)
+            # Format ACOS as percentage (already calculated as percentage in placement_adjuster)
             if 'ACOS %' in df_display.columns:
                 df_display['ACOS %'] = df_display['ACOS %'].apply(
-                    lambda x: f"{x * 100:.1f}%" if pd.notna(x) and x < 10 else f"{x:.1f}%" if pd.notna(x) else ""
+                    lambda x: f"{x:.1f}%" if pd.notna(x) else ""
                 )
             
             st.dataframe(df_display, use_container_width=True)
@@ -1126,7 +1127,8 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                         from app.utils.placement_adjuster import compute_placement_adjustments
                         placement_changes_filtered = compute_placement_adjustments(
                             st.session_state.df_campaign, 
-                            target_acos=current_target_acos
+                            target_acos=current_target_acos,
+                            df_campaign_full=st.session_state.df_campaign
                         )
                         # Keep totals for Base CPC extraction in export, but filter for display purposes if needed
                         # The export function needs the totals rows to extract base_cpc_total values
