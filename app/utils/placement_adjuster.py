@@ -287,7 +287,9 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                     'is_zero_sales': is_zero_sales_campaign,
                     'scaling_applied': scaling_factor < 1.0,
                     'scaling_factor': round(scaling_factor, 4) if scaling_factor < 1.0 else None,
-                    'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None
+                    'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None,
+                    'bid_capped': False,  # Normal campaigns don't have bid capping
+                    'special_rule': None  # Mark as normal campaign
                 })
 
             # --- Totals row per campaign ---
@@ -323,7 +325,9 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 'is_zero_sales': is_zero_sales_campaign,
                 'scaling_applied': scaling_factor < 1.0,
                 'scaling_factor': round(scaling_factor, 4) if scaling_factor < 1.0 else None,
-                'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None
+                'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None,
+                'bid_capped': False,  # Normal campaigns don't have bid capping
+                'special_rule': None  # Mark as normal campaign
             })
 
     # Sort recommendations to ensure consistent order: Top-Platzierung, Platzierung Produktseite, Platzierung Rest der Suche

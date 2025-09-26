@@ -906,10 +906,22 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                                 lambda x: "🎯 <20 Klicks" if x == 'low_top_clicks' else ""
                             )
                         
-                        # Add bid capping indicator
-                        if 'bid_capped' in df_placements.columns:
-                            df_display['Max-Gebot begrenzt'] = df_placements['bid_capped'].apply(
-                                lambda x: "💰 €1,50" if x else ""
+                        # Add Standardgebot (Base CPC) column
+                        if 'base_cpc' in df_placements.columns:
+                            df_display['Standardgebot'] = df_placements.apply(
+                                lambda row: f"€{row.get('base_cpc', 0):.2f}" 
+                                if pd.notna(row.get('base_cpc')) and not row.get('is_total', False)
+                                else "", 
+                                axis=1
+                            )
+                        
+                        # Add max bid calculation (Anpassung × Gebot)
+                        if 'base_cpc' in df_placements.columns and 'recommended_adjust_pct' in df_placements.columns:
+                            df_display['Max-Gebot'] = df_placements.apply(
+                                lambda row: f"€{row.get('base_cpc', 0) * (1 + row.get('recommended_adjust_pct', 0) / 100):.2f}" 
+                                if pd.notna(row.get('base_cpc')) and pd.notna(row.get('recommended_adjust_pct')) and not row.get('is_total', False)
+                                else "", 
+                                axis=1
                             )
                         
                         # Format the percentage columns
@@ -926,7 +938,13 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                         
                         # Show special rule summary
                         special_rule_count = df_placements.get('special_rule', pd.Series()).eq('low_top_clicks').sum()
-                        capped_count = df_placements.get('bid_capped', pd.Series()).eq(True).sum()
+                        # Count capped bids for special rule campaigns
+                        capped_count = 0
+                        if 'bid_capped' in df_placements.columns and 'special_rule' in df_placements.columns:
+                            capped_count = len(df_placements[
+                                (df_placements['bid_capped'] == True) & 
+                                (df_placements['special_rule'] == 'low_top_clicks')
+                            ])
                         
                         if special_rule_count > 0:
                             st.info(f"🎯 **{special_rule_count} Platzierungen** verwenden Spezialregel für <20 Klicks")
