@@ -482,32 +482,29 @@ def render_placement_adjustments_tab(initial_adjustments):
                     # Get base CPC info
                     base_cpc = special_row.get('base_cpc', 0.50)
                     
-                    # Display special rule information
-                    st.info(f"🎯 **SPEZIALREGEL ANGEWENDET für Campaign {campaign_id}**: Top-Platzierung hat <20 Klicks")
+                    # Display only basic special rule information
+                    st.info(f"🎯 **SPEZIALREGEL für Campaign {campaign_id}**: Top-Platzierung <20 Klicks")
                     
-                    # Check if we used default base CPC (indicating missing standard bid column)
+                    # Show Base CPC information under campaign heading
                     if base_cpc == 0.50:
-                        st.warning(f"   ⚠️ **Standardgebot-Spalte nicht gefunden** - verwende Default: €{base_cpc:.2f}")
-                        st.info(f"   🔍 **Gesuchte Spalten:** 'Standardgebot für die Anzeigengruppe', 'Standardgebot für die Anzeigengruppe (...)', etc.")
+                        st.warning(f"⚠️ Standardgebot-Spalte nicht gefunden - verwende Default: €{base_cpc:.2f}")
                     else:
-                        st.info(f"   💰 **Base CPC aus Anzeigengruppe**: €{base_cpc:.2f}")
+                        st.success(f"💰 **Base CPC**: €{base_cpc:.2f} aus Anzeigengruppe")
                     
-                    # Show the adjustment logic
+                    # Show the adjustment logic under campaign heading
                     if bid_capped:
                         if actual_increase == 0:
                             # Current percentage was already too high
                             current_max_bid = base_cpc * (1 + current_pct / 100)
-                            st.warning(f"   ⚠️ **Aktuelle Anpassung {current_pct}% ergibt bereits €{current_max_bid:.2f}** - auf {recommended_pct:.0f}% reduziert für €1,50 Max-Gebot")
-                            st.info(f"   📋 **Keine +100PP möglich** - Anpassung muss auf Maximum für €1,50 begrenzt werden")
-                            st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {recommended_pct:.0f}% (auf Maximum reduziert) | Max-Gebot: €{new_max_bid:.2f}")
+                            st.warning(f"⚠️ Aktuelle Anpassung {current_pct}% ergibt bereits €{current_max_bid:.2f} - auf {recommended_pct:.0f}% reduziert für €1,50 Max-Gebot")
+                            st.info(f"📋 Keine +100PP möglich - Anpassung muss auf Maximum für €1,50 begrenzt werden")
                         else:
-                            # +100PP was too much - scaled down
+                            # +100PP was too much - scaled down  
                             potential_max_bid = base_cpc * (1 + (current_pct + 100) / 100)
-                            st.warning(f"   ⚠️ +100PP würde €{potential_max_bid:.2f} ergeben - auf +{actual_increase:.0f}PP skaliert für €1,50 Max-Gebot")
-                            st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {recommended_pct:.0f}% (+{actual_increase:.0f}PP skaliert) | Max-Gebot: €{new_max_bid:.2f}")
-                    else:
-                        # Normal +100PP application
-                        st.success(f"   📊 **Top-Platzierung**: {current_pct}% → {recommended_pct:.0f}% (+{actual_increase:.0f}PP) | Max-Gebot: €{new_max_bid:.2f}")
+                            st.warning(f"⚠️ +100PP würde €{potential_max_bid:.2f} ergeben - skaliert auf +{actual_increase:.0f}PP für €1,50 Max-Gebot")
+                    
+                    # Always show the final adjustment result
+                    st.success(f"📊 **Top-Platzierung**: {current_pct}% → {recommended_pct:.0f}% (+{actual_increase:.0f}PP) | €{new_max_bid:.2f}")
 
             total_row = grp[grp['is_total'] == True].iloc[0] if not grp[grp['is_total'] == True].empty else None
 
@@ -529,7 +526,7 @@ def render_placement_adjustments_tab(initial_adjustments):
                         ("Klicks", f"{int(total_row['clicks'])}"),
                         ("Ausgaben", f"€{total_row['spend']:.2f}"),
                         ("Verkäufe", f"€{total_row['sales']:.2f}"),
-                        ("ACOS", f"{total_row['current_acos']}%"),
+                        ("ACOS", f"{total_row['current_acos'] * 100:.1f}%" if total_row['current_acos'] < 10 else f"{total_row['current_acos']:.1f}%"),
                         ("RPC gesamt", f"{total_row['total_rpc']:.4f}"),
                         ("Ziel-CPC", f"€{total_row['target_cpc']:.2f}"),
                         ("Basis-CPC", f"€{total_row['base_cpc_total']:.2f}"),
@@ -560,7 +557,7 @@ def render_placement_adjustments_tab(initial_adjustments):
             ]
             
             # Add scaling info if available
-            if any(grp.get('scaling_applied', False)):
+            if 'scaling_applied' in grp.columns and grp['scaling_applied'].any():
                 display_cols.append('integer_multiplier')
             display_cols = [c for c in display_cols if c in grp.columns]
 
@@ -580,6 +577,13 @@ def render_placement_adjustments_tab(initial_adjustments):
                 'integer_multiplier': 'CPC Multiplikator'
             }
             df_display = df_display.rename(columns={k: v for k, v in rename_map.items() if k in df_display.columns})
+            
+            # Format ACOS as percentage (convert from decimal to percentage)
+            if 'ACOS %' in df_display.columns:
+                df_display['ACOS %'] = df_display['ACOS %'].apply(
+                    lambda x: f"{x * 100:.1f}%" if pd.notna(x) and x < 10 else f"{x:.1f}%" if pd.notna(x) else ""
+                )
+            
             st.dataframe(df_display, use_container_width=True)
 
 
