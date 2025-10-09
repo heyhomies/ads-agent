@@ -186,8 +186,8 @@ def render_keyword_changes_tab(keyword_perf):
 
     for campaign_id, grp in df_kw.groupby('campaign_id'):
         # Get campaign info from campaign data if available
-        campaign_name = "N/A"
-        targeting_type = "N/A"
+        campaign_name = "Unbekannt"
+        targeting_type = "Unbekannt"
         
         if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
             df_campaign = st.session_state.df_campaign
@@ -195,16 +195,22 @@ def render_keyword_changes_tab(keyword_perf):
             campaign_rows = df_campaign[df_campaign['kampagnen-id'] == campaign_id]
             if not campaign_rows.empty:
                 first_row = campaign_rows.iloc[0]
-                # Get campaign name
-                if 'campaign_name' in first_row:
-                    campaign_name = first_row['campaign_name']
+                # Get campaign name with fallback options
+                name_candidates = ['campaign_name', 'Kampagnenname', 'kampagnenname']
+                for col in name_candidates:
+                    if col in first_row and pd.notna(first_row[col]) and first_row[col] != '':
+                        campaign_name = first_row[col]
+                        break
                 
-                # Get targeting type
-                if 'targeting-typ' in first_row:
-                    targeting_type = first_row['targeting-typ']
+                # Get targeting type with fallback options
+                targeting_candidates = ['targeting-typ', 'targeting_type', 'Targeting-Typ']
+                for col in targeting_candidates:
+                    if col in first_row and pd.notna(first_row[col]) and first_row[col] != '':
+                        targeting_type = first_row[col]
+                        break
         
-        st.markdown(f"### 📊 Kampagne **{campaign_id}**")
-        st.markdown(f"**Name:** {campaign_name} | **Targeting:** {targeting_type}")
+        st.markdown(f"### 📋 **{campaign_name}** (ID: {campaign_id})")
+        st.markdown(f"**Targeting-Typ:** {targeting_type}")
 
         # Simplified keyword categorization into 3 meaningful groups
         def categorize_keyword(row):
@@ -463,7 +469,23 @@ def render_placement_adjustments_tab(initial_adjustments):
     # Separate totals for metrics display
     for campaign_id, grp in df_placement.groupby('campaign_id'):
         with st.container():
-            st.markdown(f"### Kampagne **{campaign_id}**")
+            # Get campaign name from the session state campaign data
+            campaign_name = "Unbekannt"
+            
+            if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
+                campaign_df = st.session_state.df_campaign
+                # Look for this campaign ID in the campaign data
+                campaign_rows = campaign_df[campaign_df['kampagnen-id'] == campaign_id]
+                if not campaign_rows.empty:
+                    # Try different possible campaign name columns
+                    name_candidates = ['campaign_name', 'Kampagnenname', 'kampagnenname']
+                    for col in name_candidates:
+                        if col in campaign_rows.columns:
+                            campaign_name = campaign_rows[col].iloc[0]
+                            if pd.notna(campaign_name) and campaign_name != '':
+                                break
+            
+            st.markdown(f"### 📋 **{campaign_name}** (ID: {campaign_id})")
 
             # *** CHECK FOR SPECIAL RULE AND DISPLAY INFORMATION ***
             special_rule_applied = grp['special_rule'].eq('low_top_clicks').any() if 'special_rule' in grp.columns else False
@@ -707,8 +729,8 @@ def render_products_tab():
         if 'Targeting-Typ' in campaign_products.columns:
             targeting_type = campaign_products['Targeting-Typ'].iloc[0] if not campaign_products['Targeting-Typ'].isna().all() else "Unbekannt"
         
-        st.subheader(f"📢 Kampagne {campaign_id}")
-        st.write(f"**Name:** {campaign_name} | **Targeting:** {targeting_type}")
+        st.subheader(f"📦 **{campaign_name}** (ID: {campaign_id})")
+        st.markdown(f"**Targeting-Typ:** {targeting_type}")
         
         # Campaign summary metrics - check for different possible column names
         spend_cols = ['Ausgaben', 'ausgaben', 'spend', 'Spend']
@@ -871,8 +893,10 @@ def render_export_tab(optimization_results: Dict[str, Any]):
         
         st.markdown("### 🎯 **Spezialregel für wenig Traffic:**")
         st.markdown("• **Bedingung**: Top-Platzierung < 20 Klicks")
-        st.markdown("• **Aktion**: Nur Top-Platzierung +100% (andere bleiben unverändert)")
-        st.markdown("• **Max-Gebot-Schutz**: Automatische Begrenzung auf €1,50")
+        st.markdown("• **Aktion**: Nur Top-Platzierung +100PP (andere bleiben unverändert)")
+        st.markdown("### 💰 **Max-Gebot-Schutz für alle Kampagnen:**")
+        st.markdown("• **Automatische Begrenzung**: Alle Max-Gebote werden auf €1,50 begrenzt")
+        st.markdown("• **Skalierung**: Anpassungsprozentsatz wird runterskaliert wenn nötig")
         
         if 'placement_adjustments' in optimization_results:
             placements = optimization_results['placement_adjustments']
@@ -948,8 +972,14 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                         
                         if special_rule_count > 0:
                             st.info(f"🎯 **{special_rule_count} Platzierungen** verwenden Spezialregel für <20 Klicks")
-                        if capped_count > 0:
-                            st.warning(f"💰 **{capped_count} Max-Gebote** wurden auf €1,50 begrenzt")
+                        # Count ALL capped bids (special rule + normal campaigns)
+                        total_capped_count = df_placements.get('bid_capped', pd.Series()).eq(True).sum()
+                        
+                        if total_capped_count > 0:
+                            if capped_count > 0 and capped_count < total_capped_count:
+                                st.warning(f"💰 **{total_capped_count} Max-Gebote** wurden auf €1,50 begrenzt ({capped_count} Spezialregel + {total_capped_count - capped_count} normale Kampagnen)")
+                            else:
+                                st.warning(f"💰 **{total_capped_count} Max-Gebote** wurden auf €1,50 begrenzt")
             else:
                 st.success("✅ Keine Platzierungs-Anpassungen erforderlich")
         else:
@@ -999,7 +1029,8 @@ def render_export_tab(optimization_results: Dict[str, Any]):
         keyword_acos = client_config.get('keyword_acos', 20.0)
         max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
         
-        st.markdown(f"**Pausierungs-Kriterien**: ACOS >{keyword_acos:.1f}% oder ≥{max_keyword_clicks} Klicks ohne Conversion")
+        st.markdown(f"**Pausierungs-Kriterien**: ACOS >{keyword_acos:.1f}% **ODER** ≥{max_keyword_clicks} Klicks ohne Conversion")
+        st.markdown("ℹ️ **ODER-Logik**: Keyword wird pausiert wenn **eine der beiden** Bedingungen erfüllt ist")
         st.markdown(f"📊 **Aktuelle Konfiguration**: Keyword ACOS Limit: {keyword_acos}% | Max Klicks: {max_keyword_clicks}")
         
         # Analyze actual campaign keywords (not search terms) for pausing
@@ -1098,11 +1129,12 @@ def render_export_tab(optimization_results: Dict[str, Any]):
     
     st.markdown("### ⚠️ **Wichtige Hinweise:**")
     st.markdown("""
+    - **Kampagnennamen werden aktualisiert** mit Optimierungsdatum (DDMMYY) und Ziel-ACOS
     - **Keywords erhalten Basis-CPC ihrer Kampagne** - basierend auf Platzierungs-Optimierung
     - **Platzierungs-Anpassungen** werden für alle drei Placement-Typen optimiert
-    - **Spezialregel**: Kampagnen mit <20 Klicks Top-Platzierung bekommen nur +100% Top-Placement-Erhöhung
-    - **Max-Gebot-Schutz**: Automatische Begrenzung auf €1,50 bei Spezialregel
-    - **Keywords/Produkte werden pausiert** basierend auf intelligenter Analyse aus Konfiguration
+    - **Spezialregel**: Kampagnen mit <20 Klicks Top-Platzierung bekommen nur +100PP Top-Placement-Erhöhung
+    - **Max-Gebot-Schutz**: Automatische Begrenzung auf €1,50 für alle Kampagnen
+    - **Keywords/Produkte werden pausiert** basierend auf ODER-Logik aus Konfiguration
     - **Alle anderen Sheets** bleiben unverändert erhalten
     - **Original-Datei** wird nicht überschrieben - eine neue Datei wird erstellt
     """)

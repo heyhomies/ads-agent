@@ -2,6 +2,7 @@ import pandas as pd
 from io import BytesIO
 import streamlit as st # For potential logging or error display, though not strictly needed here
 from .campaign_pauser import CampaignPauser
+from datetime import datetime
 
 def generate_export_excel(original_excel_path: str,
                           bid_changes: list,
@@ -100,6 +101,8 @@ def generate_export_excel(original_excel_path: str,
         updated_keywords_count = 0
         updated_placements_count = 0
         updated_base_cpc_count = 0
+        anzeigengruppe_updates = 0
+        campaign_name_updates = 0
         
         # --- KEYWORD BID UPDATES DISABLED ---
         # Keyword bid updates have been disabled per user request.
@@ -197,6 +200,8 @@ def generate_export_excel(original_excel_path: str,
             bid_cols_to_update = []
             if 'Gebot' in df_to_update.columns:
                 bid_cols_to_update.append('Gebot')
+            if 'Standardgebot für die Anzeigengruppe' in df_to_update.columns:
+                bid_cols_to_update.append('Standardgebot für die Anzeigengruppe')
             if 'Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)' in df_to_update.columns:
                 bid_cols_to_update.append('Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)')
             
@@ -265,13 +270,108 @@ def generate_export_excel(original_excel_path: str,
                         st.warning(f"   ⚠️ No '{target_entity}' rows found for campaign {camp_id}. Available entities: {sorted(campaign_entities)}")
                 
                 st.info(f"📊 **Total Base CPC Updates:** {updated_base_cpc_count} rows")
+                
+                # *** UPDATE ANZEIGENGRUPPE STANDARD BID COLUMNS ***
+                # Update "Standardgebot für die Anzeigengruppe" for Anzeigengruppe entities
+                anzeigengruppe_updates = 0
+                
+                for camp_id, base_cpc_val in campaign_base_cpc.items():
+                    try:
+                        base_cpc_numeric = float(base_cpc_val)
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    # Find Anzeigengruppe entities for this campaign
+                    anzeigengruppe_mask = (
+                        (df_to_update['Kampagnen-ID'] == camp_id) &
+                        (df_to_update[entity_col].astype(str).str.lower() == 'anzeigengruppe')
+                    )
+                    
+                    anzeigengruppe_idxs = df_to_update[anzeigengruppe_mask].index
+                    
+                    if not anzeigengruppe_idxs.empty:
+                        # Update Standardgebot columns for Anzeigengruppe entities
+                        base_cpc_rounded = round(base_cpc_numeric, 2)
+                        
+                        # Update the main Standardgebot column
+                        if 'Standardgebot für die Anzeigengruppe' in df_to_update.columns:
+                            df_to_update.loc[anzeigengruppe_idxs, 'Standardgebot für die Anzeigengruppe'] = base_cpc_rounded
+                        
+                        # Update the info-only column if it exists
+                        if 'Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)' in df_to_update.columns:
+                            df_to_update.loc[anzeigengruppe_idxs, 'Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)'] = base_cpc_rounded
+                        
+                        # Set Operation column for Anzeigengruppe updates
+                        if df_to_update['Operation'].dtype != 'object':
+                            df_to_update['Operation'] = df_to_update['Operation'].astype('object')
+                        df_to_update.loc[anzeigengruppe_idxs, 'Operation'] = 'Update'
+                        
+                        anzeigengruppe_updates += len(anzeigengruppe_idxs)
+                        st.success(f"   ✅ Anzeigengruppe: Campaign {camp_id} - {len(anzeigengruppe_idxs)} Standardgebote aktualisiert auf €{base_cpc_rounded:.2f}")
+                
+                if anzeigengruppe_updates > 0:
+                    st.info(f"📊 **Anzeigengruppe-Updates:** {anzeigengruppe_updates} Standardgebote aktualisiert")
+                
+                # *** UPDATE CAMPAIGN NAMES WITH DATE AND TARGET ACOS ***
+                # Update Kampagnenname for Campaign entities with optimization date and target ACOS
+                if client_config and 'target_acos_placement' in client_config:
+                    # Generate date string in (D)DMMYY format
+                    today = datetime.now()
+                    day = today.day
+                    month = today.month
+                    year = today.year % 100  # Last 2 digits of year
+                    date_str = f"{day}{month:02d}{year:02d}"  # e.g., "91025" for 9. Oct 2025
+                    
+                    target_acos_pct = int(client_config.get('target_acos_placement', 20))
+                    
+                    # Find Campaign entities
+                    campaign_mask = df_to_update[entity_col].astype(str).str.lower() == 'kampagne'
+                    campaign_entities = df_to_update[campaign_mask]
+                    
+                    if not campaign_entities.empty:
+                        st.info(f"🏷️ **Updating campaign names** with date {date_str} and target ACOS {target_acos_pct}%")
+                        
+                        for idx, campaign_row in campaign_entities.iterrows():
+                            # Get original campaign name
+                            original_name = campaign_row.get('Kampagnenname', campaign_row.get('Campaign Name', 'Unknown'))
+                            
+                            # Remove existing date and ACOS suffix if present (in case of re-optimization)
+                            # Pattern: remove all " [date] [acos]%" patterns from end
+                            import re
+                            cleaned_name = str(original_name)
+                            # Remove multiple date/acos patterns that might exist
+                            cleaned_name = re.sub(r'\s+\d{5,6}\s+\d{1,2}%', '', cleaned_name)  # Remove all occurrences
+                            cleaned_name = re.sub(r'\s+\d{5,6}$', '', cleaned_name)  # Remove trailing date without %
+                            cleaned_name = cleaned_name.strip()  # Clean up any extra spaces
+                            
+                            # Add new optimization date and target ACOS
+                            new_name = f"{cleaned_name} {date_str} {target_acos_pct}%"
+                            
+                            # Update campaign name
+                            if 'Kampagnenname' in df_to_update.columns:
+                                df_to_update.at[idx, 'Kampagnenname'] = new_name
+                            if 'Campaign Name' in df_to_update.columns:
+                                df_to_update.at[idx, 'Campaign Name'] = new_name
+                                
+                            # Set Operation for campaign name update
+                            if df_to_update['Operation'].dtype != 'object':
+                                df_to_update['Operation'] = df_to_update['Operation'].astype('object')
+                            df_to_update.at[idx, 'Operation'] = 'Update'
+                            
+                            campaign_name_updates += 1
+                            
+                            campaign_id = campaign_row.get('Kampagnen-ID', 'Unknown')
+                            st.success(f"   ✅ Campaign {campaign_id}: '{cleaned_name}' → '{new_name}'")
+                        
+                        if campaign_name_updates > 0:
+                            st.info(f"📊 **Campaign Name Updates:** {campaign_name_updates} Kampagnennamen aktualisiert")
             
             elif not entity_col:
                 st.warning("⚠️ No Entity column found. Base CPC updates skipped.")
             elif not targeting_col:
                 st.warning("⚠️ No Targeting Type column found. Base CPC updates skipped.")
             elif not bid_cols_to_update:
-                st.warning("⚠️ No bid columns ('Gebot' or 'Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)') found. Base CPC updates skipped.")
+                st.warning("⚠️ No bid columns ('Gebot', 'Standardgebot für die Anzeigengruppe', 'Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)') found. Base CPC updates skipped.")
             elif not campaign_base_cpc:
                 st.warning("⚠️ No Base CPC values found in placement changes. Base CPC updates skipped.")
 
@@ -301,6 +401,10 @@ def generate_export_excel(original_excel_path: str,
             messages.append(f"{updated_placements_count} Platzierungs-Anpassungen")
         if updated_base_cpc_count > 0:
             messages.append(f"{updated_base_cpc_count} Basis-CPC Aktualisierungen")
+        if anzeigengruppe_updates > 0:
+            messages.append(f"{anzeigengruppe_updates} Anzeigengruppe-Standardgebote")
+        if campaign_name_updates > 0:
+            messages.append(f"{campaign_name_updates} Kampagnennamen aktualisiert")
         if paused_keywords_count > 0:
             messages.append(f"{paused_keywords_count} Keywords pausiert")
         if paused_products_count > 0:

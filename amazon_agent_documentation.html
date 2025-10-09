@@ -425,51 +425,120 @@
 
                 <h3>Konfigurierbare Parameter</h3>
                 <div class="card">
-                    <span class="badge badge-info">Max. Klicks: 50</span>
-                    <span class="badge badge-info">Keyword ACOS: 20%</span>
-                    <span class="badge badge-info">Produkt ACOS: 20%</span>
-                    <span class="badge badge-info">Ziel-ACOS: 20%</span>
+                    <span class="badge badge-info">Max. Klicks ohne Conversion: 50</span>
+                    <span class="badge badge-info">Keyword ACOS-Grenze: 20%</span>
+                    <span class="badge badge-info">Produkt ACOS-Grenze: 20%</span>
+                    <span class="badge badge-info">Ziel-ACOS für Gebotsanpassungen: 20%</span>
                 </div>
 
-                <h3>Keyword-Pausierung</h3>
+                <h3>1. Keyword-Klassifizierung</h3>
+                <div class="card-info">
+                    <h4>Klassifizierung erfolgt in dieser Reihenfolge:</h4>
+                    <ol>
+                        <li><strong>Keine Verkäufe:</strong> sales = 0 → "schlecht"</li>
+                        <li><strong>Keine Conversions trotz Traffic:</strong> clicks ≥ 25 UND orders = 0 → "schlecht" (nur Klassifizierung)</li>
+                        <li><strong>ACOS zu hoch ODER Conversion Rate zu niedrig:</strong> 
+                            <br>ACOS > Ziel-ACOS (20%) ODER CR < Min-CR (10%) → "schlecht"</li>
+                        <li><strong>Gute Performance:</strong> ACOS ≤ Ziel-ACOS UND CR ≥ Min-CR → "gut"</li>
+                        <li><strong>Fallback:</strong> Alle anderen → "schlecht"</li>
+                    </ol>
+                </div>
+
+                <h3>2. Pausierungs-Logik</h3>
+                
+                <h4>Keywords pausieren</h4>
                 <div class="card-warning">
-                    <h4>Pausiert wird wenn:</h4>
+                    <strong>Pausiert wird wenn (ODER-Verknüpfung):</strong>
                     <ul>
-                        <li>ACOS > Keyword-Grenzwert (z.B. 20%)</li>
-                        <li>Klicks ≥ Max-Grenzwert (z.B. 50) UND keine Bestellungen</li>
+                        <li><strong>ACOS-Grenze überschritten:</strong> ACOS > Keyword-ACOS-Grenze (z.B. 20%)</li>
+                        <li><strong>Ineffizienter Traffic:</strong> Klicks ≥ Max-Klicks (z.B. 50) UND Bestellungen = 0</li>
+                    </ul>
+                    <p><em>Hinweise: ACOS wird automatisch von % in Dezimalwert umgewandelt falls nötig<br>
+                    Unterschied zur Klassifizierung: Pausierung erst ab 50 Klicks (vs. 25 für Klassifizierung "schlecht")</em></p>
+                </div>
+
+                <h4>Produkte pausieren</h4>
+                <div class="card-warning">
+                    <strong>Pausiert wird wenn:</strong>
+                    <ul>
+                        <li><strong>Mit Verkäufen:</strong> ACOS > Produkt-ACOS-Grenze (z.B. 20%)</li>
+                        <li><strong>Ohne Verkäufe:</strong> Hypothetischer ACOS > Produkt-ACOS-Grenze</li>
+                    </ul>
+                    <p><em>Hypothetischer ACOS: Ausgaben ÷ (DB-Preis brutto ÷ 1,19)</em></p>
+                </div>
+
+                <h3>3. Gebotsanpassungen (Placement Optimization)</h3>
+
+                <h4>Entscheidungslogik</h4>
+                <div class="card-info">
+                    <strong>System prüft pro Kampagne:</strong>
+                    <ul>
+                        <li>Hat Top-Platzierung < 20 Klicks? → Spezialregel</li>
+                        <li>Hat Top-Platzierung ≥ 20 Klicks? → Standard-Optimierung</li>
                     </ul>
                 </div>
 
-                <h3>Produkt-Pausierung</h3>
-                <div class="card-warning">
-                    <h4>Pausiert wird wenn:</h4>
-                    <ul>
-                        <li>Bei Verkäufen > 0: ACOS > Produkt-Grenzwert</li>
-                        <li>Bei Verkäufen = 0: Hypothetischer ACOS > Produkt-Grenzwert</li>
-                    </ul>
-                </div>
-
-                <h3>Gebotsanpassungen</h3>
+                <h4>Standard-Optimierung (≥20 Klicks Top-Platzierung)</h4>
                 <div class="card-success">
-                    <h4>Standard-Optimierung (≥20 Klicks Top-Platzierung):</h4>
+                    <h5>Schritt 1: RPC-Berechnungen</h5>
                     <ul>
-                        <li><strong>Basis-CPC:</strong> Niedrigster RPC × Ziel-ACOS</li>
-                        <li><strong>Anpassung:</strong> (RPC ÷ Min-RPC - 1) × 100 = %</li>
-                        <li><strong>Skalierung:</strong> Bei >900% wird Basis-CPC erhöht</li>
+                        <li><strong>RPC pro Platzierung:</strong> Verkäufe ÷ Klicks</li>
+                        <li><strong>Bei 0 Verkäufen:</strong> Verkäufe = 1€ für Berechnung setzen</li>
+                        <li><strong>Min-RPC:</strong> Niedrigster RPC-Wert aller Platzierungen</li>
                     </ul>
                     
-                    <h4>Spezialregel (<20 Klicks Top-Platzierung):</h4>
+                    <h5>Schritt 2: Basis-CPC berechnen</h5>
+                    <div class="code">Basis-CPC = Min-RPC × Ziel-ACOS</div>
+                    
+                    <h5>Schritt 3: Anpassungen berechnen</h5>
+                    <div class="code">Anpassung (%) = (Platzierung-RPC ÷ Min-RPC - 1) × 100</div>
+                    
+                    <h5>Schritt 4: Skalierung prüfen</h5>
                     <ul>
-                        <li>Top-Platzierung: +100% (max. €1,50 Gebot)</li>
-                        <li>Andere Platzierungen: unverändert</li>
+                        <li><strong>Falls Anpassung > 900%:</strong></li>
+                        <li>Integer-Multiplikator = int(max_prozent ÷ 900) + 1</li>
+                        <li>Basis-CPC × Integer-Multiplikator</li>
+                        <li>Alle Anpassungen proportional reduzieren (max. 900%)</li>
                     </ul>
                 </div>
 
-                <h3>RPC-Berechnung</h3>
-                <div class="code">
-RPC = Verkäufe ÷ Klicks
-Bei 0 Verkäufen: 1€ für Berechnung verwenden
-Min-RPC = Niedrigster Wert aller Platzierungen
+                <h4>Spezialregel (<20 Klicks Top-Platzierung)</h4>
+                <div class="card-warning">
+                    <h5>Angewendet bei wenig Traffic:</h5>
+                    <ul>
+                        <li><strong>Top-Platzierung:</strong> Aktuelle % + 100 Prozentpunkte</li>
+                        <li><strong>Andere Platzierungen:</strong> Unverändert</li>
+                        <li><strong>Max-Gebot-Begrenzung:</strong> Neues Gebot ≤ €1,50</li>
+                        <li><strong>Bei Überschreitung:</strong> % so reduzieren, dass Max-Gebot = €1,50</li>
+                    </ul>
+                    
+                    <h5>Berechnung der Begrenzung:</h5>
+                    <div class="code">
+Neues Max-Gebot = Basis-CPC × (1 + neue_anpassung ÷ 100)
+Falls > €1,50: neue_anpassung = (€1,50 ÷ Basis-CPC - 1) × 100
+                    </div>
+                </div>
+
+                <h3>4. Basis-CPC Updates</h3>
+                <div class="card-info">
+                    <strong>Alle Entitäten einer Kampagne erhalten den berechneten Basis-CPC:</strong>
+                    <ul>
+                        <li><strong>Keywords</strong> (Entität = "Keyword")</li>
+                        <li><strong>Produktanzeigen</strong> (Entität = "Produktanzeige")</li>
+                        <li><strong>Produkt-Targeting</strong> (falls vorhanden)</li>
+                    </ul>
+                    <p><em>Basis-CPC wird in die entsprechende Gebot-Spalte geschrieben</em></p>
+                </div>
+
+                <h3>5. Zero-Sales Handling</h3>
+                <div class="card">
+                    <h4>Für RPC-Berechnungen bei 0 Verkäufen:</h4>
+                    <ul>
+                        <li><strong>Problem:</strong> RPC = 0 ÷ Klicks = 0 (nicht aussagekräftig)</li>
+                        <li><strong>Lösung:</strong> Verkäufe temporär auf 1€ setzen</li>
+                        <li><strong>Zweck:</strong> Ermöglicht sinnvolle RPC-Verhältnisse</li>
+                        <li><strong>Kennzeichnung:</strong> "is_zero_sales" Flag in Ergebnissen</li>
+                    </ul>
                 </div>
             </section>
 
@@ -487,11 +556,18 @@ Min-RPC = Niedrigster Wert aller Platzierungen
 
                 <h3>2. Optimierung</h3>
                 <div class="card">
+                    <h4>LangGraph-Workflow (3 Schritte):</h4>
+                    <ol>
+                        <li><strong>Keyword-Analyse:</strong> Klassifizierung nach 5-Stufen-Regel (keine Verkäufe → ≥25 Klicks ohne Conversions → ACOS/CR-Prüfung → gut/schlecht)</li>
+                        <li><strong>Gebots-Anpassung:</strong> Berechnung optimaler CPCs basierend auf ACOS-Performance</li>
+                        <li><strong>Zusammenfassung:</strong> Impact-Analyse und KI-generierte Empfehlungen</li>
+                    </ol>
+                    
+                    <h4>Zusätzliche Verarbeitungsschritte:</h4>
                     <ul>
-                        <li>LangGraph-Workflow: Keyword-Analyse → Gebots-Anpassung → Zusammenfassung</li>
-                        <li>Hypothetischer ACOS für Produkte ohne Verkäufe</li>
-                        <li>Platzierungs-Optimierung mit RPC-Berechnung</li>
-                        <li>Keyword-Klassifizierung nach Performance</li>
+                        <li><strong>Hypothetischer ACOS:</strong> Datenbankbasierte Berechnung für Produkte ohne Verkäufe</li>
+                        <li><strong>Platzierungs-Optimierung:</strong> RPC-Analyse mit Entscheidung Standard vs. Spezialregel</li>
+                        <li><strong>Keyword-Performance:</strong> Detaillierte Kategorisierung für Dashboard-Anzeige</li>
                     </ul>
                 </div>
 
@@ -509,63 +585,139 @@ Min-RPC = Niedrigster Wert aller Platzierungen
             <section id="export" class="section">
                 <h2>📤 Export</h2>
 
-                <h3>Änderungen im Export</h3>
+                <h3>Welche Änderungen werden vorgenommen</h3>
 
-                <h4>Gebotsanpassungen</h4>
+                <h4>1. Gebotsanpassungen (Entität = "Gebotsanpassung")</h4>
                 <div class="card-info">
+                    <strong>Für alle drei Platzierungstypen:</strong>
                     <ul>
-                        <li>Optimierung aller drei Platzierungstypen</li>
-                        <li>RPC-basierte Berechnungen</li>
-                        <li>Automatische Skalierung bei >900%</li>
-                        <li>Spezialbehandlung für Kampagnen mit wenig Traffic</li>
+                        <li><strong>Top-Platzierung</strong> (Top-of-Search)</li>
+                        <li><strong>Platzierung Produktseite</strong> (Product Pages)</li>
+                        <li><strong>Platzierung Rest der Suche</strong> (Rest-of-Search)</li>
+                    </ul>
+                    
+                    <strong>Spalte "Prozentsatz" wird aktualisiert mit:</strong>
+                    <ul>
+                        <li>Standard-Optimierung: RPC-basierte Berechnungen</li>
+                        <li>Spezialregel: +100% für Top-Platzierung bei wenig Traffic</li>
+                        <li>Skalierung: Anpassungen werden bei >900% proportional reduziert</li>
                     </ul>
                 </div>
 
-                <h4>Basis-CPC Updates</h4>
+                <h4>2. Basis-CPC Updates</h4>
                 <div class="card-info">
+                    <strong>Alle Entitäten erhalten den berechneten Kampagnen-Basis-CPC:</strong>
                     <ul>
-                        <li>Keywords erhalten Kampagnen-Basis-CPC</li>
-                        <li>Produktanzeigen erhalten Kampagnen-Basis-CPC</li>
-                        <li>Produkt-Targeting erhält Kampagnen-Basis-CPC</li>
+                        <li><strong>Keywords:</strong> Spalte "Max. Gebot" oder "CPC"</li>
+                        <li><strong>Produktanzeigen:</strong> Spalte "Max. Gebot" oder "CPC"</li>
+                        <li><strong>Produkt-Targeting:</strong> Spalte "Max. Gebot" oder "CPC"</li>
                     </ul>
+                    <p><em>Basis-CPC = Min-RPC × Ziel-ACOS (ggf. mit Integer-Skalierung)</em></p>
                 </div>
 
-                <h4>Pausierungen</h4>
+                <h4>3. Pausierungen</h4>
                 <div class="card-warning">
+                    <strong>Keywords pausieren (Entität = "Keyword"):</strong>
                     <ul>
-                        <li>Keywords: Basierend auf ACOS oder Klicks ohne Conversion</li>
-                        <li>Produkte: Regulärer oder hypothetischer ACOS</li>
-                        <li>Alle Änderungen: "Operation" = "Update", "Zustand" = "Angehalten"</li>
+                        <li>ACOS > Keyword-ACOS-Grenze (z.B. 20%)</li>
+                        <li>Klicks ≥ Max-Klicks (z.B. 50) UND Bestellungen = 0</li>
                     </ul>
+                    
+                    <strong>Produkte pausieren (Entität = "Produktanzeige"):</strong>
+                    <ul>
+                        <li>Regulärer ACOS > Produkt-ACOS-Grenze (bei Verkäufen > 0)</li>
+                        <li>Hypothetischer ACOS > Produkt-ACOS-Grenze (bei Verkäufen = 0)</li>
+                    </ul>
+                    
+                    <strong>Markierung in Excel:</strong>
+                    <ul>
+                        <li><strong>Spalte "Operation":</strong> "Update"</li>
+                        <li><strong>Spalte "Zustand":</strong> "Angehalten"</li>
+                    </ul>
+                </div>
+
+                <h4>4. Spaltenerkennung</h4>
+                <div class="card">
+                    <strong>System erkennt automatisch deutsche und englische Spalten:</strong>
+                    <table class="table">
+                        <tr>
+                            <th>Zweck</th>
+                            <th>Deutsche Spalten</th>
+                            <th>Englische Spalten</th>
+                        </tr>
+                        <tr>
+                            <td>Entität-Typ</td>
+                            <td>Entität</td>
+                            <td>Entity</td>
+                        </tr>
+                        <tr>
+                            <td>Platzierung</td>
+                            <td>Platzierung</td>
+                            <td>Placement</td>
+                        </tr>
+                        <tr>
+                            <td>Anpassung</td>
+                            <td>Prozentsatz</td>
+                            <td>Percentage</td>
+                        </tr>
+                        <tr>
+                            <td>Gebot</td>
+                            <td>Max. Gebot</td>
+                            <td>Max Bid</td>
+                        </tr>
+                        <tr>
+                            <td>Status</td>
+                            <td>Zustand</td>
+                            <td>State</td>
+                        </tr>
+                    </table>
+                </div>
+
+                <h3>Export-Prozess</h3>
+                <div class="card-success">
+                    <h4>Reihenfolge der Änderungen:</h4>
+                    <ol>
+                        <li><strong>Gebotsanpassungen anwenden</strong> (Spalte "Prozentsatz")</li>
+                        <li><strong>Basis-CPC für alle Entitäten setzen</strong> (Spalte "Max. Gebot")</li>
+                        <li><strong>Keywords pausieren</strong> basierend auf Regeln</li>
+                        <li><strong>Produkte pausieren</strong> basierend auf ACOS (inkl. hypothetisch)</li>
+                        <li><strong>Alle anderen Sheets</strong> unverändert kopieren</li>
+                    </ol>
                 </div>
 
                 <h3>Beispiel Export-Zusammenfassung</h3>
                 <div class="code">
-Änderungen:
-═══════════
+Änderungsprotokoll:
+══════════════════
 
-📊 Gebotsanpassungen: 12 Kampagnen
-   ├─ Top of Search: 0-300%
-   ├─ Product Pages: 0-150%
-   └─ Rest of Search: 0-200%
+📊 Gebotsanpassungen: 12 Kampagnen verarbeitet
+   ├─ Standard-Optimierung: 9 Kampagnen (≥20 Top-Klicks)
+   ├─ Spezialregel: 3 Kampagnen (<20 Top-Klicks)
+   ├─ Skalierung angewendet: 2 Kampagnen (>900%)
+   └─ Bid-Cap bei €1,50: 1 Kampagne
 
-💰 Basis-CPC: 847 Updates
-   ├─ Keywords: 423
-   ├─ Produktanzeigen: 234
-   └─ Produkt-Targeting: 190
+💰 Basis-CPC Updates: 847 Entitäten
+   ├─ Keywords: 423 Updates
+   ├─ Produktanzeigen: 234 Updates  
+   ├─ Produkt-Targeting: 190 Updates
+   └─ Durchschnittlicher Basis-CPC: €0,89
 
 ⏸️ Pausierungen: 23 Entitäten
-   ├─ Keywords: 18
-   └─ Produkte: 5
+   ├─ Keywords (ACOS): 12 (Ø ACOS: 34,2%)
+   ├─ Keywords (Klicks): 6 (Ø 67 Klicks ohne Conversion)
+   ├─ Produkte (regulär): 3 (Ø ACOS: 28,1%)
+   └─ Produkte (hypothetisch): 2 (Ø hyp. ACOS: 31,8%)
                 </div>
 
-                <h3>Wichtige Hinweise</h3>
+                <h3>Qualitätssicherung</h3>
                 <div class="card-success">
+                    <strong>Automatische Validierungen:</strong>
                     <ul>
-                        <li>Original Excel-Struktur bleibt erhalten</li>
-                        <li>Nur relevante Spalten werden geändert</li>
-                        <li>Amazon-kompatibles Bulk-Format</li>
-                        <li>Vollständige Änderungsprotokollierung</li>
+                        <li>Original Excel-Struktur bleibt vollständig erhalten</li>
+                        <li>Nur identifizierte Spalten werden modifiziert</li>
+                        <li>Amazon-kompatibles Bulk-Update-Format</li>
+                        <li>Vollständige Änderungsprotokollierung mit Audit-Trail</li>
+                        <li>Backup der Original-Werte vor Änderungen</li>
                     </ul>
                 </div>
             </section>

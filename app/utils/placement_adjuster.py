@@ -15,8 +15,11 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
     - Maximum percentage is capped at exactly 900%
     - No percentage goes below 0%
 
+    MAX BID PROTECTION: All campaigns (normal and special rule) have max bid capped at €1.50.
+    If the calculated max bid would exceed €1.50, the percentage is scaled down accordingly.
+
     SPECIAL RULE: If Top-Platzierung has < 20 clicks, apply +100 percentage points increase only to Top-Platzierung,
-    with max bid capped at €1.50 using Base CPC from Anzeigengruppe entity.
+    using Base CPC from Anzeigengruppe entity instead of RPC-based calculation.
 
     Args:
         df_campaign (pd.DataFrame): The processed campaign dataframe from `process_amazon_report`.
@@ -270,11 +273,21 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 else:
                     recommended_pct = placement_rec['recommended_pct']
 
+                # *** ADD €1.50 MAX BID CAPPING FOR NORMAL CAMPAIGNS ***
+                max_bid_original = base_cpc * (1 + recommended_pct / 100)
+                bid_capped = False
+                
+                if max_bid_original > 1.50:
+                    # Scale down percentage to hit €1.50 max bid
+                    recommended_pct = ((1.50 / base_cpc) - 1) * 100
+                    recommended_pct = max(0, recommended_pct)  # Don't go negative
+                    bid_capped = True
+
                 recommendations.append({
                     'campaign_id': campaign_id,
                     'placement': placement_rec['placement_label'],
                     'current_adjust_pct': placement_rec['current_pct'],
-                    'recommended_adjust_pct': recommended_pct,
+                    'recommended_adjust_pct': round(recommended_pct),
                     'cpc': row.get('cpc', row['calc_cpc']),
                     'current_acos': round((row[spend_col] / row[sales_col] * 100), 2) if row[sales_col] > 0 else None,
                     'rpc': round(placement_rec['rpc'], 4) if placement_rec['rpc'] != float('inf') else None,
@@ -288,8 +301,9 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                     'scaling_applied': scaling_factor < 1.0,
                     'scaling_factor': round(scaling_factor, 4) if scaling_factor < 1.0 else None,
                     'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None,
-                    'bid_capped': False,  # Normal campaigns don't have bid capping
-                    'special_rule': None  # Mark as normal campaign
+                    'bid_capped': bid_capped,  # €1.50 bid capping applied
+                    'special_rule': None,  # Mark as normal campaign
+                    'new_max_bid': min(max_bid_original, 1.50)  # Store capped max bid
                 })
 
             # --- Totals row per campaign ---
@@ -326,8 +340,8 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 'scaling_applied': scaling_factor < 1.0,
                 'scaling_factor': round(scaling_factor, 4) if scaling_factor < 1.0 else None,
                 'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None,
-                'bid_capped': False,  # Normal campaigns don't have bid capping
-                'special_rule': None  # Mark as normal campaign
+                'bid_capped': False,  # Totals row doesn't have bid capping
+                'special_rule': None  # Normal campaign total
             })
 
     # Sort recommendations to ensure consistent order: Top-Platzierung, Platzierung Produktseite, Platzierung Rest der Suche
