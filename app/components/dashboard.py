@@ -481,8 +481,9 @@ def render_placement_adjustments_tab(initial_adjustments):
                     name_candidates = ['campaign_name', 'Kampagnenname', 'kampagnenname']
                     for col in name_candidates:
                         if col in campaign_rows.columns:
-                            campaign_name = campaign_rows[col].iloc[0]
-                            if pd.notna(campaign_name) and campaign_name != '':
+                            name_value = campaign_rows[col].iloc[0]
+                            if pd.notna(name_value) and name_value != '':
+                                campaign_name = name_value
                                 break
             
             st.markdown(f"### 📋 **{campaign_name}** (ID: {campaign_id})")
