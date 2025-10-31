@@ -146,13 +146,20 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 if row['placement_key'] == 'top-platzierung':
                     # Apply +100 percentage points to Top-Platzierung
                     target_pct = current_pct + 100
-                    max_bid = base_cpc * (1 + target_pct / 100)
-                    actual_increase = 100
                     
-                    # Cap at €1.50 max bid
+                    # *** FIRST: Cap at 900% maximum (Amazon limit) ***
+                    if target_pct > 900:
+                        target_pct = 900
+                    
+                    max_bid = base_cpc * (1 + target_pct / 100)
+                    actual_increase = target_pct - current_pct
+                    
+                    # *** SECOND: Cap at €1.50 max bid ***
                     if max_bid > 1.50:
                         # Scale down to hit €1.50 exactly
                         target_pct = ((1.50 / base_cpc) - 1) * 100
+                        # But still respect 900% limit
+                        target_pct = min(target_pct, 900)
                         max_bid = 1.50
                         actual_increase = target_pct - current_pct
                     
