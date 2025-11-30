@@ -311,60 +311,6 @@ def generate_export_excel(original_excel_path: str,
                 
                 if anzeigengruppe_updates > 0:
                     st.info(f"📊 **Anzeigengruppe-Updates:** {anzeigengruppe_updates} Standardgebote aktualisiert")
-                
-                # *** UPDATE CAMPAIGN NAMES WITH DATE AND TARGET ACOS ***
-                # Update Kampagnenname for Campaign entities with optimization date and target ACOS
-                if client_config and 'target_acos_placement' in client_config:
-                    # Generate date string in (D)DMMYY format
-                    today = datetime.now()
-                    day = today.day
-                    month = today.month
-                    year = today.year % 100  # Last 2 digits of year
-                    date_str = f"{day}{month:02d}{year:02d}"  # e.g., "91025" for 9. Oct 2025
-                    
-                    target_acos_pct = int(client_config.get('target_acos_placement', 20))
-                    
-                    # Find Campaign entities
-                    campaign_mask = df_to_update[entity_col].astype(str).str.lower() == 'kampagne'
-                    campaign_entities = df_to_update[campaign_mask]
-                    
-                    if not campaign_entities.empty:
-                        st.info(f"🏷️ **Updating campaign names** with date {date_str} and target ACOS {target_acos_pct}%")
-                        
-                        for idx, campaign_row in campaign_entities.iterrows():
-                            # Get original campaign name
-                            original_name = campaign_row.get('Kampagnenname', campaign_row.get('Campaign Name', 'Unknown'))
-                            
-                            # Remove existing date and ACOS suffix if present (in case of re-optimization)
-                            # Pattern: remove all " [date] [acos]%" patterns from end
-                            import re
-                            cleaned_name = str(original_name)
-                            # Remove multiple date/acos patterns that might exist
-                            cleaned_name = re.sub(r'\s+\d{5,6}\s+\d{1,2}%', '', cleaned_name)  # Remove all occurrences
-                            cleaned_name = re.sub(r'\s+\d{5,6}$', '', cleaned_name)  # Remove trailing date without %
-                            cleaned_name = cleaned_name.strip()  # Clean up any extra spaces
-                            
-                            # Add new optimization date and target ACOS
-                            new_name = f"{cleaned_name} {date_str} {target_acos_pct}%"
-                            
-                            # Update campaign name
-                            if 'Kampagnenname' in df_to_update.columns:
-                                df_to_update.at[idx, 'Kampagnenname'] = new_name
-                            if 'Campaign Name' in df_to_update.columns:
-                                df_to_update.at[idx, 'Campaign Name'] = new_name
-                                
-                            # Set Operation for campaign name update
-                            if df_to_update['Operation'].dtype != 'object':
-                                df_to_update['Operation'] = df_to_update['Operation'].astype('object')
-                            df_to_update.at[idx, 'Operation'] = 'Update'
-                            
-                            campaign_name_updates += 1
-                            
-                            campaign_id = campaign_row.get('Kampagnen-ID', 'Unknown')
-                            st.success(f"   ✅ Campaign {campaign_id}: '{cleaned_name}' → '{new_name}'")
-                        
-                        if campaign_name_updates > 0:
-                            st.info(f"📊 **Campaign Name Updates:** {campaign_name_updates} Kampagnennamen aktualisiert")
             
             elif not entity_col:
                 st.warning("⚠️ No Entity column found. Base CPC updates skipped.")
@@ -374,6 +320,61 @@ def generate_export_excel(original_excel_path: str,
                 st.warning("⚠️ No bid columns ('Gebot', 'Standardgebot für die Anzeigengruppe', 'Standardgebot für die Anzeigengruppe (Nur zu Informationszwecken)') found. Base CPC updates skipped.")
             elif not campaign_base_cpc:
                 st.warning("⚠️ No Base CPC values found in placement changes. Base CPC updates skipped.")
+            
+            # *** UPDATE CAMPAIGN NAMES WITH DATE AND TARGET ACOS ***
+            # Moved outside Base CPC block - campaign names should always be updated when entity_col exists
+            # This ensures renaming happens even if campaign_base_cpc is empty
+            if entity_col and client_config and 'target_acos_placement' in client_config:
+                # Generate date string in (D)DMMYY format
+                today = datetime.now()
+                day = today.day
+                month = today.month
+                year = today.year % 100  # Last 2 digits of year
+                date_str = f"{day}{month:02d}{year:02d}"  # e.g., "91025" for 9. Oct 2025
+                
+                target_acos_pct = int(client_config.get('target_acos_placement', 20))
+                
+                # Find Campaign entities
+                campaign_mask = df_to_update[entity_col].astype(str).str.lower() == 'kampagne'
+                campaign_entities = df_to_update[campaign_mask]
+                
+                if not campaign_entities.empty:
+                    st.info(f"🏷️ **Updating campaign names** with date {date_str} and target ACOS {target_acos_pct}%")
+                    
+                    for idx, campaign_row in campaign_entities.iterrows():
+                        # Get original campaign name
+                        original_name = campaign_row.get('Kampagnenname', campaign_row.get('Campaign Name', 'Unknown'))
+                        
+                        # Remove existing date and ACOS suffix if present (in case of re-optimization)
+                        # Pattern: remove all " [date] [acos]%" patterns from end
+                        import re
+                        cleaned_name = str(original_name)
+                        # Remove multiple date/acos patterns that might exist
+                        cleaned_name = re.sub(r'\s+\d{5,6}\s+\d{1,2}%', '', cleaned_name)  # Remove all occurrences
+                        cleaned_name = re.sub(r'\s+\d{5,6}$', '', cleaned_name)  # Remove trailing date without %
+                        cleaned_name = cleaned_name.strip()  # Clean up any extra spaces
+                        
+                        # Add new optimization date and target ACOS
+                        new_name = f"{cleaned_name} {date_str} {target_acos_pct}%"
+                        
+                        # Update campaign name
+                        if 'Kampagnenname' in df_to_update.columns:
+                            df_to_update.at[idx, 'Kampagnenname'] = new_name
+                        if 'Campaign Name' in df_to_update.columns:
+                            df_to_update.at[idx, 'Campaign Name'] = new_name
+                            
+                        # Set Operation for campaign name update
+                        if df_to_update['Operation'].dtype != 'object':
+                            df_to_update['Operation'] = df_to_update['Operation'].astype('object')
+                        df_to_update.at[idx, 'Operation'] = 'Update'
+                        
+                        campaign_name_updates += 1
+                        
+                        campaign_id = campaign_row.get('Kampagnen-ID', 'Unknown')
+                        st.success(f"   ✅ Campaign {campaign_id}: '{cleaned_name}' → '{new_name}'")
+                    
+                    if campaign_name_updates > 0:
+                        st.info(f"📊 **Campaign Name Updates:** {campaign_name_updates} Kampagnennamen aktualisiert")
 
         # ------------------- Apply Campaign Pausing Logic ----------------------------
         # Pause keywords and products based on ACOS thresholds
