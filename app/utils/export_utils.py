@@ -56,10 +56,12 @@ def generate_export_excel(original_excel_path: str,
         
         sheets_data = {}
         for name in sheet_names_to_process:
-            if name in xls.sheet_names: # Ensure the sheet actually exists in the file
-                 sheets_data[name] = xls.parse(name)
+            if name in xls.sheet_names:
+                df_sheet = xls.parse(name)
+                if not df_sheet.empty:  # Skip empty sheets (e.g. placeholder "Sheet3")
+                    sheets_data[name] = df_sheet
             else:
-                 st.warning(f"Export Warning: Sheet '{name}' was listed but not found in the original file. It will be skipped.")
+                st.warning(f"Export Warning: Sheet '{name}' was listed but not found in the original file. It will be skipped.")
 
         if campaign_sheet_name not in sheets_data:
             st.error(f"Export Error: Campaign sheet '{campaign_sheet_name}' not found in the loaded Excel data.")

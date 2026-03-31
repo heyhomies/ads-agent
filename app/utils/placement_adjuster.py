@@ -5,7 +5,7 @@ import warnings
 import streamlit as st
 
 
-def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float = 0.20, df_campaign_full: pd.DataFrame = None) -> List[Dict]:
+def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float = 0.20, df_campaign_full: pd.DataFrame = None, campaign_target_acos: dict | None = None) -> List[Dict]:
     """Compute bid adjustment recommendations for placement rows (Gebotsanpassung) in the campaign sheet.
 
     For zero-sales placements with clicks, sales are adjusted to 1 Euro for meaningful RPC calculations.
@@ -105,9 +105,22 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
     # Results list
     recommendations: List[Dict] = []
 
+    # Pre-build campaign_id → campaign_name mapping for per-campaign ACOS lookup
+    campaign_name_col = find_column(df_campaign, ['campaign_name', 'kampagne', 'kampagnenname'])
+    id_to_name: dict = {}
+    if campaign_name_col and campaign_id_col in df_campaign.columns:
+        id_to_name = df_campaign[[campaign_id_col, campaign_name_col]].dropna().drop_duplicates().set_index(campaign_id_col)[campaign_name_col].to_dict()
+
     # Group by campaign ID
     for campaign_id, grp in df_place.groupby(campaign_id_col):
-        
+
+        # Resolve effective target ACOS for this campaign
+        campaign_name = str(id_to_name.get(campaign_id, ''))
+        if campaign_target_acos and campaign_name in campaign_target_acos:
+            effective_target_acos = campaign_target_acos[campaign_name] / 100
+        else:
+            effective_target_acos = target_acos
+
         # *** CHECK FOR SPECIAL RULE: Top-Platzierung < 20 clicks ***
         top_placement = grp[grp['placement_key'] == 'top-platzierung']
         
@@ -223,7 +236,7 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
             min_rpc = valid_rpc.min()
             
             # Base CPC calculation using adjusted sales (no minimum needed since we adjust sales to 1 Euro)
-            base_cpc = min_rpc * target_acos  # Basis CPC
+            base_cpc = min_rpc * effective_target_acos  # Basis CPC
             # Check if this was originally a zero sales campaign before adjustment
             original_sales = grp[sales_col].sum()
             is_zero_sales_campaign = (original_sales == 0)

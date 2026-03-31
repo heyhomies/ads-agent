@@ -22,7 +22,11 @@ def process_amazon_report(file_path):
     """
     try:
         xls = pd.ExcelFile(file_path)
-        all_sheet_names = xls.sheet_names
+        # Filter out empty sheets (e.g. placeholder "Sheet3" added by Excel/Amazon)
+        all_sheet_names = [
+            name for name in xls.sheet_names
+            if not xls.parse(name).empty
+        ]
         st.info(f"Sheets found in Excel file: {', '.join(all_sheet_names)}")
 
         original_search_terms_sheet_name = None

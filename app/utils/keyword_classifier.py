@@ -2,7 +2,7 @@ from typing import List, Dict
 import pandas as pd
 
 
-def classify_keywords(df_campaign: pd.DataFrame, target_acos: float = 0.2, min_conversion_rate: float = 0.10) -> List[Dict]:
+def classify_keywords(df_campaign: pd.DataFrame, target_acos: float = 0.2, min_conversion_rate: float = 0.10, campaign_target_acos: dict | None = None) -> List[Dict]:
     """Classify keyword rows in Sponsored Products-Kampagnen sheet as good or bad using the same logic as optimizer.
 
     Args:
@@ -40,12 +40,12 @@ def classify_keywords(df_campaign: pd.DataFrame, target_acos: float = 0.2, min_c
         
         kw_rows[col] = pd.to_numeric(kw_rows[col], errors='coerce')
 
-    target_acos_decimal = target_acos  # Keep as decimal (0.2 = 20%)
-    min_conversion_rate_decimal = min_conversion_rate  # Use parameter value
+    min_conversion_rate_decimal = min_conversion_rate
 
     records: List[Dict] = []
     for _, row in kw_rows.iterrows():
         campaign_id = row.get('kampagnen-id')
+        campaign_name = str(row.get('campaign_name', ''))
         keyword = row.get('keyword')
         clicks = row.get('clicks', 0)
         spend = row.get('spend', 0)
@@ -55,6 +55,12 @@ def classify_keywords(df_campaign: pd.DataFrame, target_acos: float = 0.2, min_c
         conversion_rate = row.get('conversion_rate', float('nan'))
         match_type = row.get('match_type', '')
 
+        # Use per-campaign target ACOS if available, fall back to global
+        if campaign_target_acos and campaign_name in campaign_target_acos:
+            effective_target_acos = campaign_target_acos[campaign_name] / 100
+        else:
+            effective_target_acos = target_acos
+
         # Apply the same logic as optimizer.py
         if sales == 0:
             status = 'schlecht'
@@ -62,17 +68,17 @@ def classify_keywords(df_campaign: pd.DataFrame, target_acos: float = 0.2, min_c
         elif clicks >= 25 and orders == 0:
             status = 'schlecht'
             reason = f'Keine Conversions nach {clicks} Klicks'
-        elif (not pd.isna(acos) and acos > target_acos_decimal) or (not pd.isna(conversion_rate) and conversion_rate < min_conversion_rate_decimal):
+        elif (not pd.isna(acos) and acos > effective_target_acos) or (not pd.isna(conversion_rate) and conversion_rate < min_conversion_rate_decimal):
             status = 'schlecht'
             cr_display = f"{conversion_rate*100:.1f}%" if not pd.isna(conversion_rate) else "N/A"
             acos_display = f"{acos*100:.1f}%" if not pd.isna(acos) else "N/A"
-            if (not pd.isna(acos) and acos > target_acos_decimal) and (not pd.isna(conversion_rate) and conversion_rate < min_conversion_rate_decimal):
+            if (not pd.isna(acos) and acos > effective_target_acos) and (not pd.isna(conversion_rate) and conversion_rate < min_conversion_rate_decimal):
                 reason = f'Hoher ACOS ({acos_display}) und niedrige CR ({cr_display})'
-            elif not pd.isna(acos) and acos > target_acos_decimal:
+            elif not pd.isna(acos) and acos > effective_target_acos:
                 reason = f'ACOS über Ziel ({acos_display})'
             else:
                 reason = f'Niedrige Conversion Rate ({cr_display})'
-        elif (not pd.isna(acos) and acos <= target_acos_decimal) and (not pd.isna(conversion_rate) and conversion_rate >= min_conversion_rate_decimal):
+        elif (not pd.isna(acos) and acos <= effective_target_acos) and (not pd.isna(conversion_rate) and conversion_rate >= min_conversion_rate_decimal):
             status = 'gut'
             cr_display = f"{conversion_rate*100:.1f}%" if not pd.isna(conversion_rate) else "N/A"
             acos_display = f"{acos*100:.1f}%" if not pd.isna(acos) else "N/A"

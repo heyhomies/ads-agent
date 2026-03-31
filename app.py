@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import os
+import base64
+from pathlib import Path
 from app.utils.excel_processor import process_amazon_report
 from app.utils.optimizer import apply_optimization_rules
 from app.components.dashboard import render_dashboard
@@ -10,13 +12,63 @@ from io import BytesIO
 from app.utils.placement_adjuster import compute_placement_adjustments
 
 st.set_page_config(
-    page_title="Amazon PPC Optimizer",
+    page_title="Amazon PPC Optimizer by heyhome",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
+# Load logo
+_logo_path = Path(__file__).parent / "logo.png"
+_logo_b64 = ""
+if _logo_path.exists():
+    _logo_b64 = base64.b64encode(_logo_path.read_bytes()).decode()
+
+st.markdown("""
+<style>
+/* Buttons: Dunkelgrün mit Gelb */
+.stButton > button,
+.stDownloadButton > button {
+    background-color: #4d7b73 !important;
+    color: #e7e137 !important;
+    border: 1px solid #4d7b73 !important;
+    font-weight: bold !important;
+}
+.stButton > button:hover,
+.stDownloadButton > button:hover {
+    background-color: #3a6059 !important;
+    color: #e7e137 !important;
+    border-color: #3a6059 !important;
+}
+.stButton > button:active,
+.stDownloadButton > button:active {
+    background-color: #2d4d48 !important;
+    color: #e7e137 !important;
+}
+
+/* Erfolgsmeldungen: Hellgrün Hintergrund, Dunkelgrün Text */
+div[data-testid="stNotification"] {
+    background-color: #b3d8b8 !important;
+    border-color: #4d7b73 !important;
+}
+div[data-testid="stNotification"] p,
+div[data-testid="stNotification"] span {
+    color: #4d7b73 !important;
+}
+div[data-testid="stNotification"] svg {
+    fill: #4d7b73 !important;
+    color: #4d7b73 !important;
+}
+.stAlert > div {
+    background-color: #b3d8b8 !important;
+    color: #4d7b73 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 def main():
+    if _logo_b64:
+        st.sidebar.image(_logo_path, width=45)
     st.sidebar.title("Amazon PPC Optimierer")
     
     # Initialize session state for page navigation if not already set
@@ -45,7 +97,10 @@ def main():
     active_page = st.session_state.page
     
     if active_page == "Bericht hochladen":
-        st.title("Amazon-PPC-Bericht hochladen")
+        if _logo_b64:
+            st.image(_logo_path, width=45)
+        st.title("Amazon PPC Optimizer by heyhome")
+        st.markdown("---")
         
         with st.expander("Hilfe zum Datei-Upload", expanded=True):
             st.markdown("""
@@ -126,55 +181,121 @@ def main():
                     st.session_state.identified_original_keyword_column = identified_original_keyword_column
                     st.session_state.identified_original_bid_target_column = identified_original_bid_target_column
                     st.session_state.all_original_sheet_names = all_original_sheet_names
-                    
+
+                    # ── Campaign selection & per-campaign target ACOS ──────────
+                    st.divider()
+                    st.subheader("Kampagnen-Auswahl & Ziel-ACOS")
+
+                    all_campaigns = []
+                    if 'campaign_name' in df_campaign.columns:
+                        all_campaigns = sorted([
+                            c for c in df_campaign['campaign_name'].dropna().unique()
+                            if str(c).strip()
+                        ])
+
+                    if all_campaigns:
+                        global_target = st.session_state.get('client_config', {}).get('target_acos_placement', 20.0)
+                        existing_acos = st.session_state.get('campaign_target_acos', {})
+                        existing_selection = st.session_state.get('campaign_selection', {})
+
+                        st.caption(
+                            f"Globaler Ziel-ACOS: **{global_target}%**  ·  "
+                            "Haken setzen = Kampagne optimieren, Ziel-ACOS pro Kampagne übersteuern:"
+                        )
+
+                        campaign_df = pd.DataFrame({
+                            'Optimieren': [existing_selection.get(c, True) for c in all_campaigns],
+                            'Kampagne': all_campaigns,
+                            'Ziel-ACOS (%)': [existing_acos.get(c, global_target) for c in all_campaigns],
+                        })
+
+                        edited = st.data_editor(
+                            campaign_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                'Optimieren': st.column_config.CheckboxColumn('Optimieren', width='small'),
+                                'Kampagne': st.column_config.TextColumn('Kampagne', disabled=True),
+                                'Ziel-ACOS (%)': st.column_config.NumberColumn(
+                                    'Ziel-ACOS (%)', min_value=0.0, max_value=200.0, step=0.5, format="%.1f"
+                                ),
+                            },
+                            key="campaign_acos_editor",
+                        )
+
+                        # Derive selected campaigns and per-campaign ACOS from edited table
+                        selected_campaigns = edited.loc[edited['Optimieren'], 'Kampagne'].tolist()
+                        st.session_state.campaign_selection = dict(zip(edited['Kampagne'], edited['Optimieren']))
+                        st.session_state.campaign_target_acos = dict(zip(edited['Kampagne'], edited['Ziel-ACOS (%)']))
+
+                        if not selected_campaigns:
+                            st.warning("Bitte mindestens eine Kampagne zur Optimierung auswählen.")
+                    else:
+                        selected_campaigns = []
+                        st.warning("Keine Kampagnennamen in den Daten gefunden.")
+                    # ──────────────────────────────────────────────────────────
+
                     if st.button("Optimierung starten"):
                         with st.spinner("Optimierungsregeln anwenden..."):
                             client_config = st.session_state.get('client_config', {
-                                'keyword_acos': 20.0, 
+                                'keyword_acos': 20.0,
                                 'product_acos': 20.0,
                                 'target_acos_placement': 20.0,
                                 'max_keyword_clicks': 50
                             })
+                            campaign_target_acos = st.session_state.get('campaign_target_acos', {})
+
+                            # Filter to selected campaigns only
+                            df_to_optimize = df_campaign.copy()
+                            if selected_campaigns and 'campaign_name' in df_to_optimize.columns:
+                                df_to_optimize = df_to_optimize[df_to_optimize['campaign_name'].isin(selected_campaigns)]
+                            st.session_state.df_campaign = df_to_optimize
+
                             try:
                                 optimization_results = apply_optimization_rules(
-                                    st.session_state.df_campaign, 
+                                    st.session_state.df_campaign,
                                     st.session_state.df_search_terms,
                                     client_config
                                 )
-                                
+
                                 # Add hypothetical ACOS calculations
                                 from app.utils.hypothetical_acos import add_hypothetical_acos_to_optimization_results
                                 optimization_results = add_hypothetical_acos_to_optimization_results(
-                                    optimization_results, 
+                                    optimization_results,
                                     client_config.get('target_acos', 20.0)
                                 )
-                                
+
                                 # Update session state with enriched data for dashboard access
                                 if 'df_search_terms_with_hypothetical' in optimization_results:
                                     st.session_state.df_search_terms = optimization_results['df_search_terms_with_hypothetical']
                                 if 'df_campaign_with_hypothetical' in optimization_results:
                                     st.session_state.df_campaign = optimization_results['df_campaign_with_hypothetical']
-                                # --- NEW: Calculate placement bid adjustments ---
+
+                                # Calculate placement bid adjustments (per-campaign ACOS)
                                 try:
-                                    # Use the new unified configuration key for placement target ACOS
                                     placement_target_acos = client_config.get('target_acos_placement', 20.0)
                                     placement_adjustments = compute_placement_adjustments(
                                         st.session_state.df_campaign,
                                         target_acos=placement_target_acos / 100,
-                                        df_campaign_full=st.session_state.df_campaign
+                                        df_campaign_full=st.session_state.df_campaign,
+                                        campaign_target_acos=campaign_target_acos,
                                     )
                                 except Exception as e:
                                     placement_adjustments = []
                                     st.warning(f"Platzierungs-Anpassungen konnten nicht berechnet werden: {e}")
                                 optimization_results['placement_adjustments'] = placement_adjustments
 
-                                # Keyword classification
+                                # Keyword classification (per-campaign ACOS)
                                 from app.utils.keyword_classifier import classify_keywords
-                                keyword_perf = classify_keywords(st.session_state.df_campaign, target_acos=float(client_config.get('keyword_acos',20))/100)
+                                keyword_perf = classify_keywords(
+                                    st.session_state.df_campaign,
+                                    target_acos=float(client_config.get('keyword_acos', 20)) / 100,
+                                    campaign_target_acos=campaign_target_acos,
+                                )
                                 optimization_results['keyword_performance'] = keyword_perf
                                 st.session_state.optimization_results = optimization_results
                                 st.success("Optimierung erfolgreich abgeschlossen!")
-                                st.session_state.page = "Dashboard" # Navigate to Dashboard
+                                st.session_state.page = "Dashboard"
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Fehler während der Optimierung: {str(e)}")
@@ -238,18 +359,24 @@ def main():
                     if 'df_campaign_with_hypothetical' in optimization_results:
                         st.session_state.df_campaign = optimization_results['df_campaign_with_hypothetical']
                         
-                    # Calculate placement bid adjustments
+                    # Calculate placement bid adjustments (per-campaign ACOS)
+                    campaign_target_acos = st.session_state.get('campaign_target_acos', {})
                     placement_target_acos = client_config.get('target_acos_placement', 20.0)
                     placement_adjustments = compute_placement_adjustments(
                         st.session_state.df_campaign,
                         target_acos=placement_target_acos / 100,
-                        df_campaign_full=st.session_state.df_campaign
+                        df_campaign_full=st.session_state.df_campaign,
+                        campaign_target_acos=campaign_target_acos,
                     )
                     optimization_results['placement_adjustments'] = placement_adjustments
 
-                    # Keyword classification
+                    # Keyword classification (per-campaign ACOS)
                     from app.utils.keyword_classifier import classify_keywords
-                    keyword_perf = classify_keywords(st.session_state.df_campaign, target_acos=float(client_config.get('keyword_acos',20))/100)
+                    keyword_perf = classify_keywords(
+                        st.session_state.df_campaign,
+                        target_acos=float(client_config.get('keyword_acos', 20)) / 100,
+                        campaign_target_acos=campaign_target_acos,
+                    )
                     optimization_results['keyword_performance'] = keyword_perf
                     
                     st.session_state.optimization_results = optimization_results
