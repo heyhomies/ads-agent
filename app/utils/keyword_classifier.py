@@ -13,10 +13,16 @@ def classify_keywords(df_campaign: pd.DataFrame, target_acos: float = 0.2, min_c
     Returns:
         List of dicts with classification info.
     """
-    if 'entität' not in df_campaign.columns:
+    # Find entity column (handles different capitalizations and column name variants)
+    entity_col = None
+    for candidate in ['entität', 'entitat', 'entity', 'Entität', 'entitaet']:
+        if candidate in df_campaign.columns:
+            entity_col = candidate
+            break
+    if entity_col is None:
         return []
 
-    kw_rows = df_campaign[df_campaign['entität'].str.lower() == 'keyword'].copy()
+    kw_rows = df_campaign[df_campaign[entity_col].astype(str).str.lower() == 'keyword'].copy()
     if kw_rows.empty:
         return []
 

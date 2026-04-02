@@ -461,7 +461,10 @@ def render_placement_adjustments_tab(initial_adjustments):
         placement_adjustments = initial_adjustments or []
 
     if not placement_adjustments:
-        st.info("No placement adjustment data available")
+        if st.session_state.get("placement_error"):
+            st.error(f"⚠️ Platzierungsanpassungen konnten nicht berechnet werden: {st.session_state['placement_error']}")
+        else:
+            st.info("Keine Platzierungsanpassungsdaten verfügbar — möglicherweise enthält die Datei keine 'Gebotsanpassung'-Zeilen.")
         return
 
     df_placement = pd.DataFrame(placement_adjustments)
@@ -720,10 +723,12 @@ def render_products_tab():
     for campaign_id, campaign_products in campaign_groups:
         # Get campaign name
         campaign_name = "Unbekannt"
-        if 'Kampagnenname' in campaign_products.columns:
-            campaign_name = campaign_products['Kampagnenname'].iloc[0] if not campaign_products['Kampagnenname'].isna().all() else "Unbekannt"
-        elif 'Kampagnenname (Nur zu Informationszwecken)' in campaign_products.columns:
-            campaign_name = campaign_products['Kampagnenname (Nur zu Informationszwecken)'].iloc[0] if not campaign_products['Kampagnenname (Nur zu Informationszwecken)'].isna().all() else "Unbekannt"
+        for name_col in ['Kampagnenname', 'Kampagne', 'Kampagnenname (Nur zu Informationszwecken)', 'campaign_name']:
+            if name_col in campaign_products.columns:
+                val = campaign_products[name_col].dropna()
+                if not val.empty:
+                    campaign_name = val.iloc[0]
+                    break
         
         # Get targeting type
         targeting_type = "Unbekannt"

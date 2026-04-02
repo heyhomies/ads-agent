@@ -152,6 +152,15 @@ def process_amazon_report(file_path):
                 else:
                     df_campaign_processed[col] = ""
         
+        # Fill campaign_name from read-only info column for rows where it's NaN
+        # (Amazon only populates the editable 'Kampagnenname' on Kampagne rows;
+        #  all other entities like Gebotsanpassung, Keyword etc. only have the info column)
+        info_col = 'kampagnenname_(nur_zu_informationszwecken)'
+        if 'campaign_name' in df_campaign_processed.columns and info_col in df_campaign_processed.columns:
+            df_campaign_processed['campaign_name'] = df_campaign_processed['campaign_name'].fillna(
+                df_campaign_processed[info_col]
+            )
+
         # Only calculate metrics if they don't exist in the Excel file
         if 'conversion_rate' not in df_campaign_processed.columns and 'orders' in df_campaign_processed.columns and 'clicks' in df_campaign_processed.columns:
             df_campaign_processed['conversion_rate'] = (df_campaign_processed['orders'] / df_campaign_processed['clicks'].replace(0, float('nan')))

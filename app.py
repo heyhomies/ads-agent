@@ -282,7 +282,7 @@ def main():
                                     )
                                 except Exception as e:
                                     placement_adjustments = []
-                                    st.warning(f"Platzierungs-Anpassungen konnten nicht berechnet werden: {e}")
+                                    st.session_state["placement_error"] = str(e)
                                 optimization_results['placement_adjustments'] = placement_adjustments
 
                                 # Keyword classification (per-campaign ACOS)
