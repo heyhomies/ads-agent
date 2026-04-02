@@ -73,26 +73,25 @@ def main():
     
     # Initialize session state for page navigation if not already set
     if 'page' not in st.session_state:
-        st.session_state.page = "Upload Report"
+        st.session_state.page = "Bericht hochladen"
         
     # Navigation
-    # Use st.session_state.page for consistent navigation after button clicks
     page_options = ["Bericht hochladen", "Konfiguration", "Dashboard"]
-    current_page_index = page_options.index(st.session_state.page) if st.session_state.page in page_options else 0
-    
-    # Update session state page based on sidebar selection
-    # This should ideally be handled by making the selectbox directly control st.session_state.page
-    # or by using a callback.
-    # For simplicity, we read the selectbox and update if it differs from current session page.
+
+    # Sync widget state BEFORE rendering selectbox so programmatic page changes
+    # (e.g. after optimization) are reflected correctly.
+    # Setting session_state[key] before widget instantiation is allowed by Streamlit.
+    if st.session_state.page in page_options:
+        st.session_state["navigation_selectbox"] = st.session_state.page
+
     selected_page_from_sidebar = st.sidebar.selectbox(
-        "Navigation", 
+        "Navigation",
         page_options,
-        index=current_page_index,
-        key="navigation_selectbox" # Add a key for stability
+        key="navigation_selectbox",
     )
     if st.session_state.page != selected_page_from_sidebar:
         st.session_state.page = selected_page_from_sidebar
-        st.rerun() # Rerun to reflect page change from sidebar
+        st.rerun()
 
     active_page = st.session_state.page
     
