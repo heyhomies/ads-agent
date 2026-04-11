@@ -197,27 +197,26 @@ def render_keyword_changes_tab(keyword_perf):
     if keyword_perf:
         df_kw = pd.DataFrame(keyword_perf)
 
-        for campaign_id, grp in df_kw.groupby('campaign_id'):
-            campaign_name, targeting_type = _get_campaign_info(campaign_id)
+        def categorize_keyword(row):
+            clicks = row.get('clicks', 0) or 0
+            is_bad = row.get('status') == 'schlecht'
+            if clicks >= max_keyword_clicks and is_bad:
+                return 'zu_pausieren'
+            return None
 
-            st.markdown(f"### 📋 **{campaign_name}** (ID: {campaign_id})")
-            st.markdown(f"**Targeting-Typ:** {targeting_type}")
+        df_kw['category'] = df_kw.apply(categorize_keyword, axis=1)
+        campaigns_with_pauses = df_kw[df_kw['category'] == 'zu_pausieren']['campaign_id'].unique()
 
-            # Categorize: only flag keywords that meet the click threshold AND ACOS/no-conversion rule
-            def categorize_keyword(row):
-                clicks = row.get('clicks', 0) or 0
-                has_enough_clicks = clicks >= max_keyword_clicks
-                # Use the classifier's status field — it already handles ACOS format correctly
-                is_bad = row.get('status') == 'schlecht'
-                if has_enough_clicks and is_bad:
-                    return 'zu_pausieren'
-                return None
+        if len(campaigns_with_pauses) == 0:
+            st.info("✅ Keine manuellen Keywords zum Pausieren gefunden.")
+        else:
+            for campaign_id in campaigns_with_pauses:
+                cat_data = df_kw[(df_kw['campaign_id'] == campaign_id) & (df_kw['category'] == 'zu_pausieren')]
+                campaign_name, targeting_type = _get_campaign_info(campaign_id)
 
-            grp = grp.copy()
-            grp['category'] = grp.apply(categorize_keyword, axis=1)
+                st.markdown(f"### 📋 **{campaign_name}** (ID: {campaign_id})")
+                st.markdown(f"**Targeting-Typ:** {targeting_type}")
 
-            cat_data = grp[grp['category'] == 'zu_pausieren']
-            if not cat_data.empty:
                 with st.expander(f"⏸️ Zu pausierende Keywords ({len(cat_data)} Keywords)"):
                     st.markdown(f"⚠️ **Keywords über den Limits:** ≥{max_keyword_clicks} Klicks **und** (ACOS >{keyword_acos:.1f}% oder keine Conversion)")
                     cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
