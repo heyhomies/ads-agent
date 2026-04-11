@@ -215,14 +215,10 @@ def render_keyword_changes_tab(keyword_perf):
         # Categorize: only flag keywords that meet the click threshold AND ACOS/no-conversion rule
         def categorize_keyword(row):
             clicks = row.get('clicks', 0) or 0
-            orders = row.get('orders', 0) or 0
-            acos = row.get('acos', 0) or 0
-
             has_enough_clicks = clicks >= max_keyword_clicks
-
-            if has_enough_clicks and acos > (keyword_acos / 100):
-                return 'zu_pausieren'
-            elif has_enough_clicks and orders == 0:
+            # Use the classifier's status field — it already handles ACOS format correctly
+            is_bad = row.get('status') == 'schlecht'
+            if has_enough_clicks and is_bad:
                 return 'zu_pausieren'
             return None
 
