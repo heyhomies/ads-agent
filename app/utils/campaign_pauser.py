@@ -63,17 +63,19 @@ class CampaignPauser:
                 
                 should_pause = False
                 reason = ""
-                
-                # Check if ACOS exceeds threshold
-                if pd.notna(current_acos) and current_acos > max_keyword_acos:
+
+                has_enough_clicks = pd.notna(clicks) and clicks >= max_clicks_no_conversion
+
+                # ACOS only reliable with enough clicks — require both conditions
+                if has_enough_clicks and pd.notna(current_acos) and current_acos > max_keyword_acos:
                     should_pause = True
                     reason = f"ACOS {current_acos*100:.1f}% > Threshold {max_keyword_acos*100:.1f}%"
-                
-                # Check clicks without conversion
-                elif pd.notna(clicks) and clicks >= max_clicks_no_conversion and (pd.isna(orders) or orders == 0):
+
+                # No conversion after reaching click threshold
+                elif has_enough_clicks and (pd.isna(orders) or orders == 0):
                     should_pause = True
                     reason = f"{clicks} Klicks ohne Conversion (>= {max_clicks_no_conversion})"
-                
+
                 if should_pause:
                     keywords_to_pause.append({
                         'keyword': keyword_text,
@@ -183,18 +185,20 @@ class CampaignPauser:
                 
                 should_pause = False
                 reason = ""
-                
+
                 # Convert ACOS to decimal if it's a percentage
                 if pd.notna(current_acos) and current_acos > 1:
                     current_acos = current_acos / 100.0
-                
-                # Check if ACOS exceeds threshold
-                if pd.notna(current_acos) and current_acos > max_keyword_acos:
+
+                has_enough_clicks = pd.notna(clicks) and clicks >= max_clicks_no_conversion
+
+                # ACOS only reliable with enough clicks — require both conditions
+                if has_enough_clicks and pd.notna(current_acos) and current_acos > max_keyword_acos:
                     should_pause = True
                     reason = f"ACOS {current_acos*100:.1f}% > Threshold {max_keyword_acos*100:.1f}%"
-                
-                # Check clicks without conversion
-                elif pd.notna(clicks) and clicks >= max_clicks_no_conversion and (pd.isna(orders) or orders == 0):
+
+                # No conversion after reaching click threshold
+                elif has_enough_clicks and (pd.isna(orders) or orders == 0):
                     should_pause = True
                     reason = f"{clicks} Klicks ohne Conversion (>= {max_clicks_no_conversion})"
                 
@@ -314,13 +318,15 @@ class CampaignPauser:
             if pd.notna(current_acos) and current_acos > 1:
                 current_acos = current_acos / 100.0
             
-            if pd.notna(current_acos) and current_acos > max_keyword_acos:
+            has_enough_clicks = pd.notna(clicks) and clicks >= max_clicks_no_conversion
+
+            if has_enough_clicks and pd.notna(current_acos) and current_acos > max_keyword_acos:
                 keywords_to_pause.append({
                     'keyword': keyword_text,
                     'acos': current_acos * 100,
                     'reason': f"ACOS {current_acos*100:.1f}% > Threshold {max_keyword_acos*100:.1f}%"
                 })
-            elif pd.notna(clicks) and clicks >= max_clicks_no_conversion and (pd.isna(orders) or orders == 0):
+            elif has_enough_clicks and (pd.isna(orders) or orders == 0):
                 keywords_to_pause.append({
                     'keyword': keyword_text,
                     'clicks': clicks,
