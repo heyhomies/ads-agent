@@ -9,9 +9,9 @@ def render_configuration():
     # Get existing config or use defaults
     if 'client_config' not in st.session_state:
         st.session_state.client_config = {
-            'max_keyword_clicks': 25,
+            'max_keyword_clicks': 30,
             'keyword_acos': 35.0,
-            'product_acos': 20.0,
+            'product_acos': 35.0,
             'target_acos_placement': 20.0
         }
     
@@ -24,7 +24,7 @@ def render_configuration():
             "Maximale Klicks pro Keyword ohne Conversion",
             min_value=1,
             max_value=1000,
-            value=st.session_state.client_config.get('max_keyword_clicks', 25),
+            value=st.session_state.client_config.get('max_keyword_clicks', 30),
             step=1,
             help="Maximale Anzahl von Klicks ohne Conversion, bevor ein Keyword pausiert wird"
         )
@@ -44,7 +44,7 @@ def render_configuration():
             "Produkt ACOS (%)",
             min_value=0.0,
             max_value=200.0,
-            value=st.session_state.client_config.get('product_acos', 20.0),
+            value=st.session_state.client_config.get('product_acos', 35.0),
             step=1.0,
             help="ACOS-Grenzwert für Produkte (einschließlich hypothetischer ACOS für Produkte ohne Verkäufe)"
         )
