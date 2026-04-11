@@ -363,17 +363,18 @@ def render_bid_changes_tab(bid_changes):
                             df_worst_disp['CR %'] = df_worst_disp['CR %'].apply(lambda x: round(x*100,2) if not pd.isna(x) else pd.NA)
 
                         def _highlight_over_threshold(row):
-                            acos_val = row.get('ACOS %', 0)
                             try:
-                                exceeds = pd.notna(acos_val) and float(acos_val) > acos_threshold
-                            except (ValueError, TypeError):
+                                acos_val = float(row['ACOS %'])
+                                exceeds = acos_val > acos_threshold
+                            except (ValueError, TypeError, KeyError):
                                 exceeds = False
-                            color = 'color: red' if exceeds else ''
-                            return [color] * len(row)
+                            style = 'background-color: #ffcccc; color: red' if exceeds else ''
+                            return [style] * len(row)
 
                         st.dataframe(
                             df_worst_disp.style.apply(_highlight_over_threshold, axis=1),
-                            use_container_width=True
+                            use_container_width=True,
+                            hide_index=True
                         )
 
                     with st.expander("Alle Suchbegriffe"):
