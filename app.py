@@ -255,7 +255,7 @@ def main():
                                 from app.utils.hypothetical_acos import add_hypothetical_acos_to_optimization_results
                                 optimization_results = add_hypothetical_acos_to_optimization_results(
                                     optimization_results,
-                                    client_config.get('target_acos', 20.0)
+                                    client_config.get('product_acos', 20.0)
                                 )
 
                                 # Update session state with enriched data for dashboard access

@@ -2,7 +2,7 @@ from typing import List, Dict
 import pandas as pd
 
 
-def classify_keywords(df_campaign: pd.DataFrame, target_acos: float = 0.2, min_conversion_rate: float = 0.10, campaign_target_acos: dict | None = None) -> List[Dict]:
+def classify_keywords(df_campaign: pd.DataFrame, target_acos: float = 0.35, min_conversion_rate: float = 0.04, campaign_target_acos: dict | None = None) -> List[Dict]:
     """Classify keyword rows in Sponsored Products-Kampagnen sheet as good or bad using the same logic as optimizer.
 
     Args:
