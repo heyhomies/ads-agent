@@ -369,7 +369,7 @@ def render_bid_changes_tab(bid_changes):
                                 exceeds = False
                             return ['color: red' if exceeds else ''] * len(row)
 
-                        fmt = {'ACOS %': '{:.1f}'}
+                        fmt = {'ACOS %': '{:.2f}'}
                         if 'CR %' in df_worst_disp.columns:
                             fmt['CR %'] = '{:.2f}'
                         for col in ['Klicks', 'Bestellungen']:
