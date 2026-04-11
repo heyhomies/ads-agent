@@ -165,7 +165,7 @@ def render_keyword_changes_tab(keyword_perf):
     keyword_acos = client_config.get('keyword_acos', 20.0)
     max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
     
-    st.info(f"📊 **Analyse-Kriterien:** ACOS-Limit {keyword_acos}% | Max. Klicks ohne Conversion: {max_keyword_clicks}")
+    st.info(f"📊 **Analyse-Kriterien:** ACOS-Limit {keyword_acos}% | Mindestklicks für Pausierungsentscheidung: {max_keyword_clicks}")
     
     if not keyword_perf:
         st.info("Keine Keyword-Daten verfügbar")
@@ -212,93 +212,57 @@ def render_keyword_changes_tab(keyword_perf):
         st.markdown(f"### 📋 **{campaign_name}** (ID: {campaign_id})")
         st.markdown(f"**Targeting-Typ:** {targeting_type}")
 
-        # Simplified keyword categorization into 3 meaningful groups
+        # Categorize: only flag keywords that meet the click threshold AND ACOS/no-conversion rule
         def categorize_keyword(row):
-            clicks = row.get('clicks', 0)
-            orders = row.get('orders', 0)
-            acos = row.get('acos', 0)
-            
-            # 1. Zu pausieren: Above limits (high ACOS or too many clicks without conversion)
-            if acos > (keyword_acos / 100):  # Above ACOS limit
+            clicks = row.get('clicks', 0) or 0
+            orders = row.get('orders', 0) or 0
+            acos = row.get('acos', 0) or 0
+
+            has_enough_clicks = clicks >= max_keyword_clicks
+
+            if has_enough_clicks and acos > (keyword_acos / 100):
                 return 'zu_pausieren'
-            elif clicks >= max_keyword_clicks and orders == 0:  # Too many clicks without conversion
+            elif has_enough_clicks and orders == 0:
                 return 'zu_pausieren'
-            
-            # 2. Zu wenig Daten: Below conversion limit but no sales yet
-            elif orders == 0:  # No conversions yet, but within limits
-                return 'zu_wenig_daten'
-            
-            # 3. Bleibende Keywords: Within bounds with conversions (will be sorted by ACOS)
-            else:
-                return 'bleibende_keywords'
+            return None
 
         grp = grp.copy()
         grp['category'] = grp.apply(categorize_keyword, axis=1)
-        
-        # Create expandable sections for the 3 main categories
-        categories = [
-            ('zu_pausieren', '⏸️ Zu pausierende Keywords'),
-            ('zu_wenig_daten', '📊 Zu wenig Daten'),
-            ('bleibende_keywords', '✅ Aktive Keywords')
-        ]
-        
-        for cat_key, cat_name in categories:
-            cat_data = grp[grp['category'] == cat_key]
-            if not cat_data.empty:
-                with st.expander(f"{cat_name} ({len(cat_data)} Keywords)"):
-                    # Show explanation for each category
-                    if cat_key == 'zu_pausieren':
-                        st.markdown(f"⚠️ **Keywords über den Limits:** ACOS >{keyword_acos:.1f}% oder ≥{max_keyword_clicks} Klicks ohne Conversion")
-                    elif cat_key == 'zu_wenig_daten':
-                        st.markdown(f"📊 **Noch keine Conversions:** Keywords innerhalb der Limits aber noch ohne Bestellungen")
-                    elif cat_key == 'bleibende_keywords':
-                        st.markdown(f"✅ **Aktive Keywords mit Conversions:** Innerhalb der Limits (ACOS ≤{keyword_acos:.1f}%) und bereits mit Bestellungen - sortiert nach ACOS")
-                    
-                    # Sort "Aktive Keywords" by ACOS (ascending - best first)
-                    if cat_key == 'bleibende_keywords':
-                        cat_data = cat_data.sort_values('acos', ascending=True)
-                    
-                    # Prepare display data - no reason needed for active keywords
-                    if cat_key == 'bleibende_keywords':
-                        cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos']
-                    else:
-                        cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
-                    
-                    if 'match_type' in cat_data.columns:
-                        cols_to_show.insert(1, 'match_type')
-                    if 'orders' in cat_data.columns:
-                        cols_to_show.insert(-2 if cat_key == 'bleibende_keywords' else -3, 'orders')
-                    if 'conversion_rate' in cat_data.columns:
-                        cols_to_show.insert(-1, 'conversion_rate')
-                    
-                    df_display = cat_data[cols_to_show].copy()
-                    
-                    rename_dict = {
-                        'keyword': 'Keyword',
-                        'clicks': 'Klicks',
-                        'orders': 'Bestellungen',
-                        'spend': 'Ausgaben',
-                        'sales': 'Verkäufe',
-                        'acos': 'ACOS %',
-                        'conversion_rate': 'CR %',
-                        'match_type': 'Übereinstimmungstyp',
-                        'reason': 'Grund'
-                    }
-                    df_display = df_display.rename(columns=rename_dict)
-                    
-                    # Format ACOS and CR as Prozentwert (convert from decimal)
-                    if 'ACOS %' in df_display.columns:
-                        df_display['ACOS %'] = df_display['ACOS %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
-                    if 'CR %' in df_display.columns:
-                        df_display['CR %'] = df_display['CR %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
-                    
-                    # Monetary columns
-                    if 'Ausgaben' in df_display.columns:
-                        df_display['Ausgaben'] = df_display['Ausgaben'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
-                    if 'Verkäufe' in df_display.columns:
-                        df_display['Verkäufe'] = df_display['Verkäufe'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
-                    
-                    st.dataframe(df_display, use_container_width=True)
+
+        cat_data = grp[grp['category'] == 'zu_pausieren']
+        if not cat_data.empty:
+            with st.expander(f"⏸️ Zu pausierende Keywords ({len(cat_data)} Keywords)"):
+                st.markdown(f"⚠️ **Keywords über den Limits:** ≥{max_keyword_clicks} Klicks **und** (ACOS >{keyword_acos:.1f}% oder keine Conversion)")
+                cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
+                if 'match_type' in cat_data.columns:
+                    cols_to_show.insert(1, 'match_type')
+                if 'orders' in cat_data.columns:
+                    cols_to_show.insert(-3, 'orders')
+                if 'conversion_rate' in cat_data.columns:
+                    cols_to_show.insert(-1, 'conversion_rate')
+
+                df_display = cat_data[cols_to_show].copy()
+                rename_dict = {
+                    'keyword': 'Keyword',
+                    'clicks': 'Klicks',
+                    'orders': 'Bestellungen',
+                    'spend': 'Ausgaben',
+                    'sales': 'Verkäufe',
+                    'acos': 'ACOS %',
+                    'conversion_rate': 'CR %',
+                    'match_type': 'Übereinstimmungstyp',
+                    'reason': 'Grund'
+                }
+                df_display = df_display.rename(columns=rename_dict)
+                if 'ACOS %' in df_display.columns:
+                    df_display['ACOS %'] = df_display['ACOS %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
+                if 'CR %' in df_display.columns:
+                    df_display['CR %'] = df_display['CR %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
+                if 'Ausgaben' in df_display.columns:
+                    df_display['Ausgaben'] = df_display['Ausgaben'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
+                if 'Verkäufe' in df_display.columns:
+                    df_display['Verkäufe'] = df_display['Verkäufe'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
+                st.dataframe(df_display, use_container_width=True)
 
 
 def render_bid_changes_tab(bid_changes):
@@ -1035,7 +999,7 @@ def render_export_tab(optimization_results: Dict[str, Any]):
         keyword_acos = client_config.get('keyword_acos', 20.0)
         max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
         
-        st.markdown(f"**Pausierungs-Kriterien**: ACOS >{keyword_acos:.1f}% **ODER** ≥{max_keyword_clicks} Klicks ohne Conversion")
+        st.markdown(f"**Pausierungs-Kriterien**: ≥{max_keyword_clicks} Klicks **und** (ACOS >{keyword_acos:.1f}% oder keine Conversion)")
         st.markdown("ℹ️ **ODER-Logik**: Keyword wird pausiert wenn **eine der beiden** Bedingungen erfüllt ist")
         st.markdown(f"📊 **Aktuelle Konfiguration**: Keyword ACOS Limit: {keyword_acos}% | Max Klicks: {max_keyword_clicks}")
         
