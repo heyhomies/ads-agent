@@ -280,6 +280,9 @@ def render_bid_changes_tab(bid_changes):
             st.markdown("---")
             st.subheader("Suchbegriff-Analyse")
 
+            client_config = st.session_state.get('client_config', {})
+            acos_threshold = client_config.get('keyword_acos', 35.0)  # in percent
+
             for camp_id, grp in df_st.groupby('kampagnen-id'):
                 with st.container():
                     # Get campaign info from campaign data if available
@@ -358,7 +361,20 @@ def render_bid_changes_tab(bid_changes):
         })
                         if 'CR %' in df_worst_disp.columns:
                             df_worst_disp['CR %'] = df_worst_disp['CR %'].apply(lambda x: round(x*100,2) if not pd.isna(x) else pd.NA)
-                        st.dataframe(df_worst_disp, use_container_width=True)
+
+                        def _highlight_over_threshold(row):
+                            acos_val = row.get('ACOS %', 0)
+                            try:
+                                exceeds = pd.notna(acos_val) and float(acos_val) > acos_threshold
+                            except (ValueError, TypeError):
+                                exceeds = False
+                            color = 'color: red' if exceeds else ''
+                            return [color] * len(row)
+
+                        st.dataframe(
+                            df_worst_disp.style.apply(_highlight_over_threshold, axis=1),
+                            use_container_width=True
+                        )
 
                     with st.expander("Alle Suchbegriffe"):
                         # kombiniere, sortiere: erst nonzero nach ACOS aufsteigend, dann zero
