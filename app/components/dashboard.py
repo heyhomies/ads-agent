@@ -182,8 +182,8 @@ def render_keyword_changes_tab(keyword_perf):
 
     # Get current configuration values
     client_config = st.session_state.get('client_config', {})
-    keyword_acos = client_config.get('keyword_acos', 20.0)
-    max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
+    keyword_acos = client_config.get('keyword_acos', 35.0)
+    max_keyword_clicks = client_config.get('max_keyword_clicks', 30)
     keyword_acos_decimal = keyword_acos / 100
 
     st.info(f"📊 **Analyse-Kriterien:** ACOS-Limit {keyword_acos}% | Mindestklicks für Pausierungsentscheidung: {max_keyword_clicks}")
@@ -727,7 +727,7 @@ def render_products_tab():
     from app.utils.hypothetical_acos import HypotheticalACOSCalculator
     
     # Get product ACOS from configuration
-    product_acos = st.session_state.get('client_config', {}).get('product_acos', 20.0)
+    product_acos = st.session_state.get('client_config', {}).get('product_acos', 35.0)
     
     # Calculate hypothetical ACOS
     calculator = HypotheticalACOSCalculator()
@@ -932,9 +932,9 @@ def render_export_tab(optimization_results: Dict[str, Any]):
     
     # Get configuration values for display
     client_config = st.session_state.get('client_config', {})
-    keyword_acos = client_config.get('keyword_acos', 20.0)
-    product_acos = client_config.get('product_acos', 20.0)
-    max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
+    keyword_acos = client_config.get('keyword_acos', 35.0)
+    product_acos = client_config.get('product_acos', 35.0)
+    max_keyword_clicks = client_config.get('max_keyword_clicks', 30)
     target_acos_placement = client_config.get('target_acos_placement', 20.0)
     
     # Show current configuration values being used
@@ -1082,8 +1082,8 @@ def render_export_tab(optimization_results: Dict[str, Any]):
         
     with st.expander("⏸️ **Keyword-Pausierung**"):
         client_config = st.session_state.get('client_config', {})
-        keyword_acos = client_config.get('keyword_acos', 20.0)
-        max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
+        keyword_acos = client_config.get('keyword_acos', 35.0)
+        max_keyword_clicks = client_config.get('max_keyword_clicks', 30)
         
         st.markdown(f"**Pausierungs-Kriterien**: ≥{max_keyword_clicks} Klicks **und** (ACOS >{keyword_acos:.1f}% oder keine Conversion)")
         st.markdown("ℹ️ **ODER-Logik**: Keyword wird pausiert wenn **eine der beiden** Bedingungen erfüllt ist")

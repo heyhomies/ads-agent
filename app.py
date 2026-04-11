@@ -232,10 +232,10 @@ def main():
                     if st.button("Optimierung starten"):
                         with st.spinner("Optimierungsregeln anwenden..."):
                             client_config = st.session_state.get('client_config', {
-                                'keyword_acos': 20.0,
-                                'product_acos': 20.0,
+                                'keyword_acos': 35.0,
+                                'product_acos': 35.0,
                                 'target_acos_placement': 20.0,
-                                'max_keyword_clicks': 50
+                                'max_keyword_clicks': 30
                             })
                             campaign_target_acos = st.session_state.get('campaign_target_acos', {})
 
@@ -256,7 +256,7 @@ def main():
                                 from app.utils.hypothetical_acos import add_hypothetical_acos_to_optimization_results
                                 optimization_results = add_hypothetical_acos_to_optimization_results(
                                     optimization_results,
-                                    client_config.get('product_acos', 20.0)
+                                    client_config.get('product_acos', 35.0)
                                 )
 
                                 # Update session state with enriched data for dashboard access
@@ -283,7 +283,7 @@ def main():
                                 from app.utils.keyword_classifier import classify_keywords
                                 keyword_perf = classify_keywords(
                                     st.session_state.df_campaign,
-                                    target_acos=float(client_config.get('keyword_acos', 20)) / 100,
+                                    target_acos=float(client_config.get('keyword_acos', 35)) / 100,
                                     campaign_target_acos=campaign_target_acos,
                                 )
                                 optimization_results['keyword_performance'] = keyword_perf
@@ -327,10 +327,10 @@ def main():
             with st.spinner("Neuberechnung mit aktueller Konfiguration..."):
                 try:
                     client_config = st.session_state.get('client_config', {
-                        'keyword_acos': 20.0, 
-                        'product_acos': 20.0,
+                        'keyword_acos': 35.0,
+                        'product_acos': 35.0,
                         'target_acos_placement': 20.0,
-                        'max_keyword_clicks': 50
+                        'max_keyword_clicks': 30
                     })
                     
                     # Recalculate optimization results
@@ -368,7 +368,7 @@ def main():
                     from app.utils.keyword_classifier import classify_keywords
                     keyword_perf = classify_keywords(
                         st.session_state.df_campaign,
-                        target_acos=float(client_config.get('keyword_acos', 20)) / 100,
+                        target_acos=float(client_config.get('keyword_acos', 35)) / 100,
                         campaign_target_acos=campaign_target_acos,
                     )
                     optimization_results['keyword_performance'] = keyword_perf
