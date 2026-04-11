@@ -78,12 +78,6 @@ def main():
     # Navigation
     page_options = ["Bericht hochladen", "Konfiguration", "Dashboard"]
 
-    # Sync widget state BEFORE rendering selectbox so programmatic page changes
-    # (e.g. after optimization) are reflected correctly.
-    # Setting session_state[key] before widget instantiation is allowed by Streamlit.
-    if st.session_state.page in page_options:
-        st.session_state["navigation_selectbox"] = st.session_state.page
-
     selected_page_from_sidebar = st.sidebar.selectbox(
         "Navigation",
         page_options,
@@ -295,6 +289,7 @@ def main():
                                 st.session_state.optimization_results = optimization_results
                                 st.success("Optimierung erfolgreich abgeschlossen!")
                                 st.session_state.page = "Dashboard"
+                                st.session_state["navigation_selectbox"] = "Dashboard"
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Fehler während der Optimierung: {str(e)}")
@@ -394,6 +389,7 @@ def main():
             st.info("Bitte laden Sie zuerst einen Bericht hoch und optimieren, um das Dashboard zu sehen und Ergebnisse zu exportieren.")
             if st.button("Zur Upload-Seite"):
                 st.session_state.page = "Bericht hochladen"
+                st.session_state["navigation_selectbox"] = "Bericht hochladen"
                 st.rerun()
         else:
             st.error("Unerwarteter Zustand: Daten vorhanden, aber Berechnungen fehlgeschlagen.")
