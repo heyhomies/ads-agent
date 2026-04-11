@@ -364,15 +364,25 @@ def render_bid_changes_tab(bid_changes):
 
                         def _highlight_over_threshold(row):
                             try:
-                                acos_val = float(row['ACOS %'])
-                                exceeds = acos_val > acos_threshold
+                                exceeds = float(row['ACOS %']) > acos_threshold
                             except (ValueError, TypeError, KeyError):
                                 exceeds = False
-                            style = 'background-color: #ffcccc; color: red' if exceeds else ''
-                            return [style] * len(row)
+                            return ['color: red' if exceeds else ''] * len(row)
+
+                        fmt = {'ACOS %': '{:.1f}'}
+                        if 'CR %' in df_worst_disp.columns:
+                            fmt['CR %'] = '{:.2f}'
+                        for col in ['Klicks', 'Bestellungen']:
+                            if col in df_worst_disp.columns:
+                                fmt[col] = '{:.0f}'
+                        for col in ['Ausgaben', 'Verkäufe']:
+                            if col in df_worst_disp.columns:
+                                fmt[col] = '€{:.2f}'
 
                         st.dataframe(
-                            df_worst_disp.style.apply(_highlight_over_threshold, axis=1),
+                            df_worst_disp.style
+                                .apply(_highlight_over_threshold, axis=1)
+                                .format(fmt, na_rep='–'),
                             use_container_width=True,
                             hide_index=True
                         )
