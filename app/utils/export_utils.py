@@ -12,7 +12,8 @@ def generate_export_excel(original_excel_path: str,
                           campaign_sheet_name: str = None, # Now required: original campaign sheet name
                           all_original_sheet_names: list = None,
                           placement_changes: list = None,
-                          client_config: dict = None):
+                          client_config: dict = None,
+                          negative_keywords: list = None):
     """
     Generates an Excel file in memory with placement adjustments and Base CPC updates.
     
@@ -396,6 +397,38 @@ def generate_export_excel(original_excel_path: str,
             except Exception as e:
                 st.warning(f"⚠️ Fehler beim Pausieren von Kampagnen-Elementen: {str(e)}")
 
+        # ------------------- Add Negative Keywords ----------------------------
+        neg_kw_count = 0
+        if negative_keywords:
+            new_rows = []
+            for nk in negative_keywords:
+                search_term = nk.get('search_term', '')
+                campaign_id = nk.get('campaign_id', '')
+                ad_group_id = nk.get('ad_group_id', '')
+                if not search_term or not campaign_id:
+                    continue
+                row = {col: '' for col in df_to_update.columns}
+                row['Produkt'] = 'Sponsored Products'
+                row['Entität'] = 'Negatives Keyword'
+                row['Operation'] = 'Create'
+                if 'Kampagnen-ID' in row:
+                    row['Kampagnen-ID'] = campaign_id
+                if 'Anzeigengruppen-ID' in row and ad_group_id:
+                    row['Anzeigengruppen-ID'] = ad_group_id
+                if 'Zustand' in row:
+                    row['Zustand'] = 'Aktiviert'
+                if 'Keyword-Text' in row:
+                    row['Keyword-Text'] = search_term
+                if 'Übereinstimmungstyp' in row:
+                    row['Übereinstimmungstyp'] = 'Negativ Exact'
+                new_rows.append(row)
+
+            if new_rows:
+                df_negatives = pd.DataFrame(new_rows, columns=df_to_update.columns)
+                df_to_update = pd.concat([df_to_update, df_negatives], ignore_index=True)
+                neg_kw_count = len(new_rows)
+                st.success(f"🚫 {neg_kw_count} Negative Keywords zur Export-Datei hinzugefügt.")
+
         sheets_data[campaign_sheet_name] = df_to_update
 
         # Show export summary
@@ -412,6 +445,8 @@ def generate_export_excel(original_excel_path: str,
             messages.append(f"{paused_keywords_count} Keywords pausiert")
         if paused_products_count > 0:
             messages.append(f"{paused_products_count} Produkte pausiert")
+        if neg_kw_count > 0:
+            messages.append(f"{neg_kw_count} Negative Keywords hinzugefügt")
         
         if messages:
             st.success(f"✅ Export erfolgreich: {', '.join(messages)} wurden aktualisiert.")

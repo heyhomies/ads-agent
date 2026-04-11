@@ -254,67 +254,74 @@ def render_keyword_changes_tab(keyword_perf):
     # --- Section 2: Search terms from auto/broad campaigns (negative keyword candidates) ---
     if 'df_search_terms' in st.session_state and st.session_state.df_search_terms is not None:
         df_st = st.session_state.df_search_terms.copy()
-        st_term_col = None
-        if 'customer_search_term' in df_st.columns:
-            st_term_col = 'customer_search_term'
-        elif 'suchbegriff_eines_kunden' in df_st.columns:
+        if 'customer_search_term' not in df_st.columns and 'suchbegriff_eines_kunden' in df_st.columns:
             df_st['customer_search_term'] = df_st['suchbegriff_eines_kunden']
-            st_term_col = 'customer_search_term'
 
-        if st_term_col and 'kampagnen-id' in df_st.columns and 'clicks' in df_st.columns and 'acos' in df_st.columns:
-            # Normalize numeric columns
+        if 'customer_search_term' in df_st.columns and 'kampagnen-id' in df_st.columns \
+                and 'clicks' in df_st.columns and 'acos' in df_st.columns:
             for col in ['clicks', 'acos', 'orders']:
                 if col in df_st.columns:
                     df_st[col] = pd.to_numeric(df_st[col], errors='coerce').fillna(0)
 
-            # Filter: enough clicks AND (high ACOS OR no conversions)
             mask_clicks = df_st['clicks'] >= max_keyword_clicks
             mask_acos = df_st['acos'] > keyword_acos_decimal
-            mask_no_conv = df_st.get('orders', pd.Series(0, index=df_st.index)) == 0 if 'orders' in df_st.columns else pd.Series(False, index=df_st.index)
-            candidates = df_st[mask_clicks & (mask_acos | mask_no_conv)].copy()
+            mask_no_conv = (df_st['orders'] == 0) if 'orders' in df_st.columns else pd.Series(False, index=df_st.index)
+            candidates = df_st[mask_clicks & (mask_acos | mask_no_conv)].reset_index(drop=True)
 
             if not candidates.empty:
                 st.markdown("---")
                 st.subheader("Negative Keyword Kandidaten (Suchbegriff-Bericht)")
                 st.info(
-                    f"Suchbegriffe aus dem Suchbegriff-Bericht, die ≥{max_keyword_clicks} Klicks "
-                    f"**und** ACOS >{keyword_acos:.1f}% (oder keine Conversion) haben. "
-                    "Da diese aus Auto-/Broad-Match-Kampagnen stammen, sollten sie als **Negative Keywords** "
-                    "in der jeweiligen Kampagne hinzugefügt werden."
+                    f"Suchbegriffe aus dem Suchbegriff-Bericht mit ≥{max_keyword_clicks} Klicks "
+                    f"**und** ACOS >{keyword_acos:.1f}% (oder keine Conversion). "
+                    "Haken setzen = als **Negatives Keyword** in den Export aufnehmen. "
+                    "Danach unten auf **'Auswahl speichern'** klicken."
                 )
 
-                for camp_id, grp_st in candidates.groupby('kampagnen-id'):
-                    campaign_name, targeting_type = _get_campaign_info(camp_id)
-                    grp_st = grp_st.sort_values('acos', ascending=False)
+                # Build display table with a selectable checkbox column
+                editor_df = pd.DataFrame({
+                    'Hinzufügen': True,
+                    'Kampagne': candidates['kampagnen-id'].map(lambda cid: _get_campaign_info(cid)[0]),
+                    'Suchbegriff': candidates['customer_search_term'],
+                    'Klicks': candidates['clicks'].astype(int),
+                    'ACOS %': candidates['acos'].apply(
+                        lambda x: round(x * 100, 2) if pd.notna(x) and x <= 1 else round(float(x), 2)
+                    ),
+                    'Bestellungen': candidates['orders'].astype(int) if 'orders' in candidates.columns else 0,
+                })
 
-                    with st.expander(f"🚫 {campaign_name} — {len(grp_st)} Negativ-Kandidaten"):
-                        st.markdown(f"**Targeting-Typ:** {targeting_type}")
-                        cols_neg = ['customer_search_term', 'clicks']
-                        for c in ['orders', 'spend', 'sales', 'acos']:
-                            if c in grp_st.columns:
-                                cols_neg.append(c)
-                        df_neg = grp_st[cols_neg].copy()
-                        df_neg['acos'] = df_neg['acos'].apply(lambda x: round(x * 100, 2) if pd.notna(x) and x <= 1 else round(x, 2))
-                        df_neg = df_neg.rename(columns={
-                            'customer_search_term': 'Suchbegriff',
-                            'clicks': 'Klicks',
-                            'orders': 'Bestellungen',
-                            'spend': 'Ausgaben',
-                            'sales': 'Verkäufe',
-                            'acos': 'ACOS %',
-                        })
-                        fmt_neg = {'ACOS %': '{:.2f}', 'Klicks': '{:.0f}'}
-                        if 'Bestellungen' in df_neg.columns:
-                            fmt_neg['Bestellungen'] = '{:.0f}'
-                        if 'Ausgaben' in df_neg.columns:
-                            fmt_neg['Ausgaben'] = '€{:.2f}'
-                        if 'Verkäufe' in df_neg.columns:
-                            fmt_neg['Verkäufe'] = '€{:.2f}'
-                        st.dataframe(
-                            df_neg.style.format(fmt_neg, na_rep='–'),
-                            use_container_width=True,
-                            hide_index=True
-                        )
+                edited = st.data_editor(
+                    editor_df,
+                    column_config={
+                        'Hinzufügen': st.column_config.CheckboxColumn('Hinzufügen', default=True),
+                        'Kampagne': st.column_config.TextColumn('Kampagne', disabled=True),
+                        'Suchbegriff': st.column_config.TextColumn('Suchbegriff', disabled=True),
+                        'Klicks': st.column_config.NumberColumn('Klicks', disabled=True, format='%d'),
+                        'ACOS %': st.column_config.NumberColumn('ACOS %', disabled=True, format='%.2f %%'),
+                        'Bestellungen': st.column_config.NumberColumn('Bestellungen', disabled=True, format='%d'),
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key='neg_kw_editor',
+                )
+
+                col_save, col_status = st.columns([1, 3])
+                with col_save:
+                    if st.button('Auswahl speichern', key='save_neg_kws'):
+                        selected_indices = edited.index[edited['Hinzufügen'] == True].tolist()
+                        neg_kws = []
+                        for i in selected_indices:
+                            row = candidates.iloc[i]
+                            neg_kws.append({
+                                'search_term': str(row['customer_search_term']),
+                                'campaign_id': str(row['kampagnen-id']),
+                                'ad_group_id': str(row['anzeigengruppen-id']) if 'anzeigengruppen-id' in candidates.columns else '',
+                            })
+                        st.session_state.confirmed_negative_keywords = neg_kws
+                with col_status:
+                    saved = st.session_state.get('confirmed_negative_keywords', [])
+                    if saved:
+                        st.success(f"✅ {len(saved)} Negative Keywords für Export gespeichert.")
 
 
 def render_bid_changes_tab(bid_changes):
@@ -1191,7 +1198,16 @@ def render_export_tab(optimization_results: Dict[str, Any]):
     # Export functionality
     st.markdown("---")
     st.markdown("### 💾 **Export starten:**")
-    
+
+    # Show confirmed negative keywords summary
+    confirmed_neg_kws = st.session_state.get('confirmed_negative_keywords', [])
+    if confirmed_neg_kws:
+        st.info(f"🚫 **{len(confirmed_neg_kws)} Negative Keywords** werden in den Export aufgenommen "
+                f"(gespeichert im Tab 'Keyword-Änderungen'). "
+                f"Zum Ändern der Auswahl zurück zum Tab wechseln.")
+    else:
+        st.info("ℹ️ Keine Negative Keywords ausgewählt. Im Tab 'Keyword-Änderungen' können Kandidaten ausgewählt und gespeichert werden.")
+
     if st.button("📤 Export-Datei vorbereiten", type="primary"):
         if not st.session_state.get('identified_original_keyword_column') or \
            not st.session_state.get('identified_original_bid_target_column'):
@@ -1242,6 +1258,9 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                         for total in total_changes:
                             st.info(f"   📊 Campaign {total.get('campaign_id')}: base_cpc_total = €{total.get('base_cpc_total', 'N/A')}")
                     
+                    # Confirmed negative keywords from Keyword-Änderungen tab
+                    confirmed_neg_kws = st.session_state.get('confirmed_negative_keywords', [])
+
                     # Generate export file
                     export_buffer = generate_export_excel(
                         original_excel_path=temp_file,
@@ -1252,7 +1271,8 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                         campaign_sheet_name=campaign_sheet,
                         all_original_sheet_names=all_sheets,
                         placement_changes=placement_changes_filtered,
-                        client_config=client_config
+                        client_config=client_config,
+                        negative_keywords=confirmed_neg_kws,
                     )
                     
                     if export_buffer:
