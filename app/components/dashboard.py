@@ -155,6 +155,26 @@ def render_overview_tab(optimization_results: Dict[str, Any]):
         st.info("Projected ACOS reduction data not available for gauge chart.")
 
 
+def _get_campaign_info(campaign_id):
+    """Helper: return (campaign_name, targeting_type) for a given campaign_id."""
+    campaign_name = "Unbekannt"
+    targeting_type = "Unbekannt"
+    if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
+        df_campaign = st.session_state.df_campaign
+        campaign_rows = df_campaign[df_campaign['kampagnen-id'] == campaign_id]
+        if not campaign_rows.empty:
+            first_row = campaign_rows.iloc[0]
+            for col in ['campaign_name', 'Kampagnenname', 'kampagnenname']:
+                if col in first_row and pd.notna(first_row[col]) and first_row[col] != '':
+                    campaign_name = first_row[col]
+                    break
+            for col in ['targeting-typ', 'targeting_type', 'Targeting-Typ']:
+                if col in first_row and pd.notna(first_row[col]) and first_row[col] != '':
+                    targeting_type = first_row[col]
+                    break
+    return campaign_name, targeting_type
+
+
 def render_keyword_changes_tab(keyword_perf):
     """Zeigt Keywords in sinnvollen Kategorien basierend auf Performance und Handlungsbedarf"""
     import pandas as pd
@@ -164,101 +184,137 @@ def render_keyword_changes_tab(keyword_perf):
     client_config = st.session_state.get('client_config', {})
     keyword_acos = client_config.get('keyword_acos', 20.0)
     max_keyword_clicks = client_config.get('max_keyword_clicks', 50)
-    
+    keyword_acos_decimal = keyword_acos / 100
+
     st.info(f"📊 **Analyse-Kriterien:** ACOS-Limit {keyword_acos}% | Mindestklicks für Pausierungsentscheidung: {max_keyword_clicks}")
-    
-    if not keyword_perf:
-        st.info("Keine Keyword-Daten verfügbar")
-        return
-    
+
+    # --- Section 1: Manual keywords (Entität = Keyword) ---
     # Re-classify keywords based on current configuration
     if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
         from app.utils.keyword_classifier import classify_keywords
-        # Re-run classification with current config values
-        keyword_acos_decimal = keyword_acos / 100  # Convert to decimal for classifier
         keyword_perf = classify_keywords(st.session_state.df_campaign, keyword_acos_decimal)
-    
-    if not keyword_perf:
-        st.info("Keine Keyword-Daten verfügbar")
-        return
-    
-    df_kw = pd.DataFrame(keyword_perf)
 
-    for campaign_id, grp in df_kw.groupby('campaign_id'):
-        # Get campaign info from campaign data if available
-        campaign_name = "Unbekannt"
-        targeting_type = "Unbekannt"
-        
-        if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
-            df_campaign = st.session_state.df_campaign
-            # Find campaign info for this campaign ID
-            campaign_rows = df_campaign[df_campaign['kampagnen-id'] == campaign_id]
-            if not campaign_rows.empty:
-                first_row = campaign_rows.iloc[0]
-                # Get campaign name with fallback options
-                name_candidates = ['campaign_name', 'Kampagnenname', 'kampagnenname']
-                for col in name_candidates:
-                    if col in first_row and pd.notna(first_row[col]) and first_row[col] != '':
-                        campaign_name = first_row[col]
-                        break
-                
-                # Get targeting type with fallback options
-                targeting_candidates = ['targeting-typ', 'targeting_type', 'Targeting-Typ']
-                for col in targeting_candidates:
-                    if col in first_row and pd.notna(first_row[col]) and first_row[col] != '':
-                        targeting_type = first_row[col]
-                        break
-        
-        st.markdown(f"### 📋 **{campaign_name}** (ID: {campaign_id})")
-        st.markdown(f"**Targeting-Typ:** {targeting_type}")
+    if keyword_perf:
+        df_kw = pd.DataFrame(keyword_perf)
 
-        # Categorize: only flag keywords that meet the click threshold AND ACOS/no-conversion rule
-        def categorize_keyword(row):
-            clicks = row.get('clicks', 0) or 0
-            has_enough_clicks = clicks >= max_keyword_clicks
-            # Use the classifier's status field — it already handles ACOS format correctly
-            is_bad = row.get('status') == 'schlecht'
-            if has_enough_clicks and is_bad:
-                return 'zu_pausieren'
-            return None
+        for campaign_id, grp in df_kw.groupby('campaign_id'):
+            campaign_name, targeting_type = _get_campaign_info(campaign_id)
 
-        grp = grp.copy()
-        grp['category'] = grp.apply(categorize_keyword, axis=1)
+            st.markdown(f"### 📋 **{campaign_name}** (ID: {campaign_id})")
+            st.markdown(f"**Targeting-Typ:** {targeting_type}")
 
-        cat_data = grp[grp['category'] == 'zu_pausieren']
-        if not cat_data.empty:
-            with st.expander(f"⏸️ Zu pausierende Keywords ({len(cat_data)} Keywords)"):
-                st.markdown(f"⚠️ **Keywords über den Limits:** ≥{max_keyword_clicks} Klicks **und** (ACOS >{keyword_acos:.1f}% oder keine Conversion)")
-                cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
-                if 'match_type' in cat_data.columns:
-                    cols_to_show.insert(1, 'match_type')
-                if 'orders' in cat_data.columns:
-                    cols_to_show.insert(-3, 'orders')
-                if 'conversion_rate' in cat_data.columns:
-                    cols_to_show.insert(-1, 'conversion_rate')
+            # Categorize: only flag keywords that meet the click threshold AND ACOS/no-conversion rule
+            def categorize_keyword(row):
+                clicks = row.get('clicks', 0) or 0
+                has_enough_clicks = clicks >= max_keyword_clicks
+                # Use the classifier's status field — it already handles ACOS format correctly
+                is_bad = row.get('status') == 'schlecht'
+                if has_enough_clicks and is_bad:
+                    return 'zu_pausieren'
+                return None
 
-                df_display = cat_data[cols_to_show].copy()
-                rename_dict = {
-                    'keyword': 'Keyword',
-                    'clicks': 'Klicks',
-                    'orders': 'Bestellungen',
-                    'spend': 'Ausgaben',
-                    'sales': 'Verkäufe',
-                    'acos': 'ACOS %',
-                    'conversion_rate': 'CR %',
-                    'match_type': 'Übereinstimmungstyp',
-                    'reason': 'Grund'
-                }
-                df_display = df_display.rename(columns=rename_dict)
-                if 'ACOS %' in df_display.columns:
-                    df_display['ACOS %'] = df_display['ACOS %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
-                if 'CR %' in df_display.columns:
-                    df_display['CR %'] = df_display['CR %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
-                if 'Ausgaben' in df_display.columns:
-                    df_display['Ausgaben'] = df_display['Ausgaben'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
-                if 'Verkäufe' in df_display.columns:
-                    df_display['Verkäufe'] = df_display['Verkäufe'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
-                st.dataframe(df_display, use_container_width=True)
+            grp = grp.copy()
+            grp['category'] = grp.apply(categorize_keyword, axis=1)
+
+            cat_data = grp[grp['category'] == 'zu_pausieren']
+            if not cat_data.empty:
+                with st.expander(f"⏸️ Zu pausierende Keywords ({len(cat_data)} Keywords)"):
+                    st.markdown(f"⚠️ **Keywords über den Limits:** ≥{max_keyword_clicks} Klicks **und** (ACOS >{keyword_acos:.1f}% oder keine Conversion)")
+                    cols_to_show = ['keyword', 'clicks', 'spend', 'sales', 'acos', 'reason']
+                    if 'match_type' in cat_data.columns:
+                        cols_to_show.insert(1, 'match_type')
+                    if 'orders' in cat_data.columns:
+                        cols_to_show.insert(-3, 'orders')
+                    if 'conversion_rate' in cat_data.columns:
+                        cols_to_show.insert(-1, 'conversion_rate')
+
+                    df_display = cat_data[cols_to_show].copy()
+                    rename_dict = {
+                        'keyword': 'Keyword',
+                        'clicks': 'Klicks',
+                        'orders': 'Bestellungen',
+                        'spend': 'Ausgaben',
+                        'sales': 'Verkäufe',
+                        'acos': 'ACOS %',
+                        'conversion_rate': 'CR %',
+                        'match_type': 'Übereinstimmungstyp',
+                        'reason': 'Grund'
+                    }
+                    df_display = df_display.rename(columns=rename_dict)
+                    if 'ACOS %' in df_display.columns:
+                        df_display['ACOS %'] = df_display['ACOS %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
+                    if 'CR %' in df_display.columns:
+                        df_display['CR %'] = df_display['CR %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
+                    if 'Ausgaben' in df_display.columns:
+                        df_display['Ausgaben'] = df_display['Ausgaben'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
+                    if 'Verkäufe' in df_display.columns:
+                        df_display['Verkäufe'] = df_display['Verkäufe'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
+                    st.dataframe(df_display, use_container_width=True)
+
+    # --- Section 2: Search terms from auto/broad campaigns (negative keyword candidates) ---
+    if 'df_search_terms' in st.session_state and st.session_state.df_search_terms is not None:
+        df_st = st.session_state.df_search_terms.copy()
+        st_term_col = None
+        if 'customer_search_term' in df_st.columns:
+            st_term_col = 'customer_search_term'
+        elif 'suchbegriff_eines_kunden' in df_st.columns:
+            df_st['customer_search_term'] = df_st['suchbegriff_eines_kunden']
+            st_term_col = 'customer_search_term'
+
+        if st_term_col and 'kampagnen-id' in df_st.columns and 'clicks' in df_st.columns and 'acos' in df_st.columns:
+            # Normalize numeric columns
+            for col in ['clicks', 'acos', 'orders']:
+                if col in df_st.columns:
+                    df_st[col] = pd.to_numeric(df_st[col], errors='coerce').fillna(0)
+
+            # Filter: enough clicks AND (high ACOS OR no conversions)
+            mask_clicks = df_st['clicks'] >= max_keyword_clicks
+            mask_acos = df_st['acos'] > keyword_acos_decimal
+            mask_no_conv = df_st.get('orders', pd.Series(0, index=df_st.index)) == 0 if 'orders' in df_st.columns else pd.Series(False, index=df_st.index)
+            candidates = df_st[mask_clicks & (mask_acos | mask_no_conv)].copy()
+
+            if not candidates.empty:
+                st.markdown("---")
+                st.subheader("Negative Keyword Kandidaten (Suchbegriff-Bericht)")
+                st.info(
+                    f"Suchbegriffe aus dem Suchbegriff-Bericht, die ≥{max_keyword_clicks} Klicks "
+                    f"**und** ACOS >{keyword_acos:.1f}% (oder keine Conversion) haben. "
+                    "Da diese aus Auto-/Broad-Match-Kampagnen stammen, sollten sie als **Negative Keywords** "
+                    "in der jeweiligen Kampagne hinzugefügt werden."
+                )
+
+                for camp_id, grp_st in candidates.groupby('kampagnen-id'):
+                    campaign_name, targeting_type = _get_campaign_info(camp_id)
+                    grp_st = grp_st.sort_values('acos', ascending=False)
+
+                    with st.expander(f"🚫 {campaign_name} — {len(grp_st)} Negativ-Kandidaten"):
+                        st.markdown(f"**Targeting-Typ:** {targeting_type}")
+                        cols_neg = ['customer_search_term', 'clicks']
+                        for c in ['orders', 'spend', 'sales', 'acos']:
+                            if c in grp_st.columns:
+                                cols_neg.append(c)
+                        df_neg = grp_st[cols_neg].copy()
+                        df_neg['acos'] = df_neg['acos'].apply(lambda x: round(x * 100, 2) if pd.notna(x) and x <= 1 else round(x, 2))
+                        df_neg = df_neg.rename(columns={
+                            'customer_search_term': 'Suchbegriff',
+                            'clicks': 'Klicks',
+                            'orders': 'Bestellungen',
+                            'spend': 'Ausgaben',
+                            'sales': 'Verkäufe',
+                            'acos': 'ACOS %',
+                        })
+                        fmt_neg = {'ACOS %': '{:.2f}', 'Klicks': '{:.0f}'}
+                        if 'Bestellungen' in df_neg.columns:
+                            fmt_neg['Bestellungen'] = '{:.0f}'
+                        if 'Ausgaben' in df_neg.columns:
+                            fmt_neg['Ausgaben'] = '€{:.2f}'
+                        if 'Verkäufe' in df_neg.columns:
+                            fmt_neg['Verkäufe'] = '€{:.2f}'
+                        st.dataframe(
+                            df_neg.style.format(fmt_neg, na_rep='–'),
+                            use_container_width=True,
+                            hide_index=True
+                        )
 
 
 def render_bid_changes_tab(bid_changes):
