@@ -21,7 +21,7 @@ def render_configuration():
         
         # Maximum clicks per keyword
         max_keyword_clicks = st.number_input(
-            "Maximale Klicks pro Keyword",
+            "Maximale Klicks pro Keyword ohne Conversion",
             min_value=1,
             max_value=1000,
             value=st.session_state.client_config.get('max_keyword_clicks', 25),
