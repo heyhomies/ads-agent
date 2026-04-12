@@ -300,12 +300,14 @@ def render_keyword_changes_tab(keyword_perf):
                     'Ø CPC (€)': st.column_config.NumberColumn('Ø CPC (€)', disabled=True, format='€%.2f'),
                 }
 
+                # Dynamic key so widget re-renders when candidate data changes
+                _editor_key = f"neg_kw_editor_{hash(tuple(candidates['customer_search_term'].astype(str)) if 'customer_search_term' in candidates.columns else 0)}"
                 edited = st.data_editor(
                     editor_df,
                     column_config=col_cfg,
                     hide_index=True,
                     use_container_width=True,
-                    key='neg_kw_editor',
+                    key=_editor_key,
                 )
 
                 col_save, col_status = st.columns([1, 3])
