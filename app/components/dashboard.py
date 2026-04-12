@@ -241,9 +241,9 @@ def render_keyword_changes_tab(keyword_perf):
                     }
                     df_display = df_display.rename(columns=rename_dict)
                     if 'ACOS %' in df_display.columns:
-                        df_display['ACOS %'] = df_display['ACOS %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
+                        df_display['ACOS %'] = df_display['ACOS %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "N/A")
                     if 'CR %' in df_display.columns:
-                        df_display['CR %'] = df_display['CR %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "N/A")
+                        df_display['CR %'] = df_display['CR %'].apply(lambda x: f"{x*100:.1f}%" if pd.notna(x) else "N/A")
                     if 'Ausgaben' in df_display.columns:
                         df_display['Ausgaben'] = df_display['Ausgaben'].apply(lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00")
                     if 'Verkäufe' in df_display.columns:
@@ -278,27 +278,31 @@ def render_keyword_changes_tab(keyword_perf):
                 )
 
                 # Build display table with a selectable checkbox column
-                editor_df = pd.DataFrame({
+                editor_data = {
                     'Hinzufügen': True,
                     'Kampagne': candidates['kampagnen-id'].map(lambda cid: _get_campaign_info(cid)[0]),
                     'Suchbegriff': candidates['customer_search_term'],
                     'Klicks': candidates['clicks'].astype(int),
-                    'ACOS %': candidates['acos'].apply(
-                        lambda x: round(x * 100, 2) if pd.notna(x) and x <= 1 else round(float(x), 2)
-                    ),
+                    'ACOS %': candidates['acos'].apply(lambda x: round(x * 100, 2) if pd.notna(x) else 0.0),
                     'Bestellungen': candidates['orders'].astype(int) if 'orders' in candidates.columns else 0,
-                })
+                }
+                if 'cpc' in candidates.columns:
+                    editor_data['Ø CPC (€)'] = candidates['cpc'].apply(lambda x: round(float(x), 2) if pd.notna(x) else 0.0)
+                editor_df = pd.DataFrame(editor_data)
+
+                col_cfg = {
+                    'Hinzufügen': st.column_config.CheckboxColumn('Hinzufügen', default=True),
+                    'Kampagne': st.column_config.TextColumn('Kampagne', disabled=True),
+                    'Suchbegriff': st.column_config.TextColumn('Suchbegriff', disabled=True),
+                    'Klicks': st.column_config.NumberColumn('Klicks', disabled=True, format='%d'),
+                    'ACOS %': st.column_config.NumberColumn('ACOS %', disabled=True, format='%.2f %%'),
+                    'Bestellungen': st.column_config.NumberColumn('Bestellungen', disabled=True, format='%d'),
+                    'Ø CPC (€)': st.column_config.NumberColumn('Ø CPC (€)', disabled=True, format='€%.2f'),
+                }
 
                 edited = st.data_editor(
                     editor_df,
-                    column_config={
-                        'Hinzufügen': st.column_config.CheckboxColumn('Hinzufügen', default=True),
-                        'Kampagne': st.column_config.TextColumn('Kampagne', disabled=True),
-                        'Suchbegriff': st.column_config.TextColumn('Suchbegriff', disabled=True),
-                        'Klicks': st.column_config.NumberColumn('Klicks', disabled=True, format='%d'),
-                        'ACOS %': st.column_config.NumberColumn('ACOS %', disabled=True, format='%.2f %%'),
-                        'Bestellungen': st.column_config.NumberColumn('Bestellungen', disabled=True, format='%d'),
-                    },
+                    column_config=col_cfg,
                     hide_index=True,
                     use_container_width=True,
                     key='neg_kw_editor',
@@ -365,7 +369,7 @@ def render_bid_changes_tab(bid_changes):
                     st.markdown(f"**Name:** {campaign_name} | **Targeting:** {targeting_type}")
 
                     # ACOS als Prozent Format
-                    grp['acos_pct'] = grp['acos'].apply(lambda x: round(x*100,2) if x <= 1 else round(x,2))
+                    grp['acos_pct'] = grp['acos'].apply(lambda x: round(x * 100, 2) if pd.notna(x) else 0.0)
 
                     # Sortierung: gültige ACOS >0 nach Wert, ACOS==0 ans Ende
                     grp_nonzero = grp[grp['acos'] > 0]
@@ -875,13 +879,13 @@ def render_products_tab():
             # Format ACOS column - this now includes hypothetical ACOS values
             if 'ACOS' in df_display.columns:
                 df_display['ACOS'] = df_display['ACOS'].apply(
-                    lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "0.0%"
+                    lambda x: f"{x*100:.1f}%" if pd.notna(x) else "0.0%"
                 )
-            
+
             # Format Conversion Rate
             if 'Conversion-Rate' in df_display.columns:
                 df_display['Conversion-Rate'] = df_display['Conversion-Rate'].apply(
-                    lambda x: f"{x*100:.1f}%" if pd.notna(x) and x <= 1 else f"{x:.1f}%" if pd.notna(x) else "0.0%"
+                    lambda x: f"{x*100:.1f}%" if pd.notna(x) else "0.0%"
                 )
             
             # Format monetary columns
