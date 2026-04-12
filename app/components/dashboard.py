@@ -566,7 +566,14 @@ def render_placement_adjustments_tab(initial_adjustments):
                     
                     # Display only basic special rule information
                     st.info(f"🎯 **SPEZIALREGEL für Campaign {campaign_id}**: Top-Platzierung <20 Klicks")
-                    
+
+                    # Low Base CPC Boost notice
+                    total_row_sr = grp[grp['is_total'] == True]
+                    if not total_row_sr.empty and total_row_sr.iloc[0].get('low_base_cpc_boosted', False):
+                        st.warning(f"⬆️ **Basis-CPC angehoben**: Ursprünglicher Basis-CPC wäre zu niedrig gewesen (Max-Gebot bei 900% < €0,80). "
+                                   f"Basis-CPC wurde auf €{base_cpc:.2f} erhöht (verdoppelt, mind. €0,08), "
+                                   f"damit Top-of-Search-Gebote wettbewerbsfähig sind.")
+
                     # Show Base CPC information under campaign heading
                     if base_cpc == 0.50:
                         st.warning(f"⚠️ Standardgebot-Spalte nicht gefunden - verwende Default: €{base_cpc:.2f}")
@@ -600,6 +607,13 @@ def render_placement_adjustments_tab(initial_adjustments):
                 st.warning(f"⚖️ **Skalierung angewendet**: Anpassungen überschritten 900%. "
                           f"Basis-CPC wurde um {integer_multiplier}x erhöht, "
                           f"Anpassungen proportional reduziert (max 900%).")
+
+            # Low Base CPC Boost notice (normal campaigns)
+            if not special_rule_applied and total_row is not None and total_row.get('low_base_cpc_boosted', False):
+                boosted_cpc = total_row.get('base_cpc_total', 0)
+                st.warning(f"⬆️ **Basis-CPC angehoben**: Ursprünglicher Basis-CPC wäre zu niedrig gewesen (Max-Gebot bei 900% < €0,80). "
+                           f"Basis-CPC wurde auf €{boosted_cpc:.2f} erhöht (verdoppelt, mind. €0,08), "
+                           f"damit Top-of-Search-Gebote wettbewerbsfähig sind.")
 
             # Display comprehensive metrics using HTML cards
             if total_row is not None and 'total_rpc' in total_row:

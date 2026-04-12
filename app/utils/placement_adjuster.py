@@ -21,6 +21,11 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
     SPECIAL RULE: If Top-Platzierung has < 20 clicks, apply +100 percentage points increase only to Top-Platzierung,
     using Base CPC from Anzeigengruppe entity instead of RPC-based calculation.
 
+    LOW BASE CPC BOOST: If the computed Base CPC is so low that even at 900% the Top-of-Search bid would
+    remain below €0.80 (the empirical threshold for reliable top placement), AND the campaign ACOS is at or
+    below the target ACOS, the Base CPC is doubled (minimum €0.08 = €0.80 / 10). Placement percentages are
+    unchanged — only the Base CPC increases, so all placement bids scale up proportionally.
+
     Args:
         df_campaign (pd.DataFrame): The processed campaign dataframe from `process_amazon_report`.
         target_acos (float, optional): Target ACOS as a fraction (e.g. 0.20 for 20%). Defaults to 0.20.
@@ -121,6 +126,10 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
         else:
             effective_target_acos = target_acos
 
+        # Empirical minimum for a competitive Top-of-Search bid
+        _TARGET_MIN_TOP_BID = 0.80
+        _MIN_BASE_CPC = _TARGET_MIN_TOP_BID / 10  # 0.08
+
         # *** CHECK FOR SPECIAL RULE: Top-Platzierung < 20 clicks ***
         top_placement = grp[grp['placement_key'] == 'top-platzierung']
         
@@ -128,22 +137,22 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
             # *** APPLY SPECIAL RULE ***
             # Get Base CPC from Anzeigengruppe entity if full dataframe available
             base_cpc = 0.50  # Default
-            
+
             if df_campaign_full is not None:
                 # Try to find Anzeigengruppe entity for this campaign
                 anzeigengruppe = df_campaign_full[
-                    (df_campaign_full[campaign_id_col] == campaign_id) & 
+                    (df_campaign_full[campaign_id_col] == campaign_id) &
                     (df_campaign_full[entity_col].astype(str).str.lower() == 'anzeigengruppe')
                 ]
-                
+
                 if not anzeigengruppe.empty:
                     # Look for Standard bid column
                     possible_cols = [
                         'standardgebot_für_die_anzeigengruppe',
-                        'Standardgebot für die Anzeigengruppe',  
+                        'Standardgebot für die Anzeigengruppe',
                         'standardgebot für die anzeigengruppe'
                     ]
-                    
+
                     for col in possible_cols:
                         if col in anzeigengruppe.columns:
                             try:
@@ -151,7 +160,19 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                                 break
                             except:
                                 continue
-            
+
+            # *** LOW BASE CPC BOOST (Special Rule path) ***
+            _sr_spend = grp[spend_col].sum()
+            _sr_sales = grp[sales_col].sum()
+            total_acos = (_sr_spend / _sr_sales * 100) if _sr_sales > 0 else None
+            _sr_acos_fraction = (_sr_spend / _sr_sales) if _sr_sales > 0 else None
+            low_base_cpc_boosted = False
+            if (base_cpc * 10 < _TARGET_MIN_TOP_BID
+                    and _sr_acos_fraction is not None
+                    and _sr_acos_fraction <= effective_target_acos):
+                base_cpc = max(base_cpc * 2, _MIN_BASE_CPC)
+                low_base_cpc_boosted = True
+
             # Process each placement with special rule
             for _, row in grp.iterrows():
                 current_pct = row[percentage_col]
@@ -211,10 +232,6 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                     })
             
             # Add campaign total for special rule
-            total_acos = None
-            if grp[sales_col].sum() > 0:
-                total_acos = (grp[spend_col].sum() / grp[sales_col].sum()) * 100
-            
             recommendations.append({
                 'campaign_id': campaign_id,
                 'placement': 'Gesamt',
@@ -224,7 +241,8 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 'current_acos': total_acos,
                 'base_cpc_total': base_cpc,
                 'is_total': True,
-                'special_rule': 'low_top_clicks'
+                'special_rule': 'low_top_clicks',
+                'low_base_cpc_boosted': low_base_cpc_boosted,
             })
             
         else:
@@ -282,7 +300,20 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 scaling_factor = 900 / max_recommended_pct
                 # Scale up Base CPC by integer multiplier
                 base_cpc = base_cpc * integer_multiplier
-            
+
+            # *** LOW BASE CPC BOOST (Normal path) ***
+            # If even at 900% the Top-of-Search bid would be below €0.80 AND ACOS is acceptable,
+            # double the Base CPC (minimum €0.08). Placement percentages are unchanged.
+            low_base_cpc_boosted = False
+            _norm_spend = grp[spend_col].sum()
+            _norm_sales_adj = grp['sales_adjusted'].sum()
+            _norm_acos = (_norm_spend / _norm_sales_adj) if _norm_sales_adj > 0 else None
+            if (base_cpc * 10 < _TARGET_MIN_TOP_BID
+                    and _norm_acos is not None
+                    and _norm_acos <= effective_target_acos):
+                base_cpc = max(base_cpc * 2, _MIN_BASE_CPC)
+                low_base_cpc_boosted = True
+
             # Second pass: Apply scaling and create final recommendations
             for placement_rec in placement_recommendations:
                 row = placement_rec['row']
@@ -321,9 +352,10 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                     'scaling_applied': scaling_factor < 1.0,
                     'scaling_factor': round(scaling_factor, 4) if scaling_factor < 1.0 else None,
                     'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None,
-                    'bid_capped': bid_capped,  # €1.50 bid capping applied
-                    'special_rule': None,  # Mark as normal campaign
-                    'new_max_bid': min(max_bid_original, 1.50)  # Store capped max bid
+                    'bid_capped': bid_capped,
+                    'special_rule': None,
+                    'new_max_bid': min(max_bid_original, 1.50),
+                    'low_base_cpc_boosted': low_base_cpc_boosted,
                 })
 
             # --- Totals row per campaign ---
@@ -360,8 +392,9 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 'scaling_applied': scaling_factor < 1.0,
                 'scaling_factor': round(scaling_factor, 4) if scaling_factor < 1.0 else None,
                 'integer_multiplier': integer_multiplier if integer_multiplier > 1 else None,
-                'bid_capped': False,  # Totals row doesn't have bid capping
-                'special_rule': None  # Normal campaign total
+                'bid_capped': False,
+                'special_rule': None,
+                'low_base_cpc_boosted': low_base_cpc_boosted,
             })
 
     # Sort recommendations to ensure consistent order: Top-Platzierung, Platzierung Produktseite, Platzierung Rest der Suche
