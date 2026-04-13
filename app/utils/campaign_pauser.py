@@ -32,9 +32,9 @@ class CampaignPauser:
             return {'keywords_to_pause': [], 'products_to_pause': []}
         
         # Get thresholds from config
-        max_keyword_acos = config.get('keyword_acos', 20.0) / 100.0  # Convert to decimal
-        max_product_acos = config.get('product_acos', 20.0) / 100.0  # Convert to decimal
-        max_clicks_no_conversion = config.get('max_keyword_clicks', 50)
+        max_keyword_acos = config.get('keyword_acos', 35.0) / 100.0  # Convert to decimal
+        max_product_acos = config.get('product_acos', 35.0) / 100.0  # Convert to decimal
+        max_clicks_no_conversion = config.get('max_keyword_clicks', 30)
         
         keywords_to_pause = []
         products_to_pause = []
@@ -46,35 +46,35 @@ class CampaignPauser:
         elif 'Entität' in df_campaign.columns:
             entity_col = 'Entität'
         
+        # Find campaign ID and name columns once
+        campaign_id_col = next((c for c in ['Kampagnen-ID', 'kampagnen-id', 'campaign_id'] if c in df_campaign.columns), None)
+        campaign_name_col = next((c for c in ['Kampagnenname (Nur zu Informationszwecken)', 'Kampagnenname', 'kampagnenname', 'campaign_name'] if c in df_campaign.columns), None)
+
         if entity_col:
             keyword_mask = df_campaign[entity_col].astype(str).str.lower() == 'keyword'
             keywords_df = df_campaign[keyword_mask].copy()
-            
+
             for _, row in keywords_df.iterrows():
-                # Try both English (processed) and German (original) column names
                 keyword_text = row.get('keyword', row.get('Keyword-Text', 'Unbekannt'))
                 clicks = row.get('clicks', row.get('Klicks', 0))
                 orders = row.get('orders', row.get('Bestellungen', 0))
                 current_acos = row.get('acos', row.get('ACOS', 0))
-                
-                # Convert ACOS to decimal if it's a percentage
+                campaign_id = row.get(campaign_id_col, '') if campaign_id_col else ''
+                campaign_name = row.get(campaign_name_col, '') if campaign_name_col else ''
+
                 if pd.notna(current_acos) and current_acos > 1:
                     current_acos = current_acos / 100.0
-                
+
                 should_pause = False
                 reason = ""
+                has_enough_clicks = pd.notna(clicks) and float(clicks) >= max_clicks_no_conversion
 
-                has_enough_clicks = pd.notna(clicks) and clicks >= max_clicks_no_conversion
-
-                # ACOS only reliable with enough clicks — require both conditions
                 if has_enough_clicks and pd.notna(current_acos) and current_acos > max_keyword_acos:
                     should_pause = True
                     reason = f"ACOS {current_acos*100:.1f}% > Threshold {max_keyword_acos*100:.1f}%"
-
-                # No conversion after reaching click threshold
-                elif has_enough_clicks and (pd.isna(orders) or orders == 0):
+                elif has_enough_clicks and (pd.isna(orders) or float(orders) == 0):
                     should_pause = True
-                    reason = f"{clicks} Klicks ohne Conversion (>= {max_clicks_no_conversion})"
+                    reason = f"{int(float(clicks))} Klicks ohne Conversion (>= {max_clicks_no_conversion})"
 
                 if should_pause:
                     keywords_to_pause.append({
@@ -82,38 +82,55 @@ class CampaignPauser:
                         'clicks': clicks,
                         'orders': orders if pd.notna(orders) else 0,
                         'acos': current_acos,
-                        'reason': reason
+                        'reason': reason,
+                        'campaign_id': campaign_id,
+                        'campaign_name': campaign_name,
                     })
-            
-            # Preview Products
+
+            # Preview Products — same click threshold logic as keywords
             product_mask = df_campaign[entity_col].astype(str).str.lower() == 'produktanzeige'
             products_df = df_campaign[product_mask].copy()
-            
+
             for _, row in products_df.iterrows():
-                # Try both English (processed) and German (original) column names
                 current_acos = row.get('acos', row.get('ACOS', 0))
                 sales = row.get('sales', row.get('Verkäufe', 0))
-                sku = row.get('sku', row.get('SKU', 'Unbekannt'))
-                
-                should_pause = False
-                reason = ""
-                
-                # Convert ACOS to decimal if it's a percentage
+                clicks = row.get('clicks', row.get('Klicks', 0))
+                orders = row.get('orders', row.get('Bestellungen', 0))
+                asin = row.get('asin', row.get('ASIN', row.get('sku', row.get('SKU', 'Unbekannt'))))
+                campaign_id = row.get(campaign_id_col, '') if campaign_id_col else ''
+                campaign_name = row.get(campaign_name_col, '') if campaign_name_col else ''
+
                 if pd.notna(current_acos) and current_acos > 1:
                     current_acos = current_acos / 100.0
-                
-                # Check regular ACOS threshold
-                if pd.notna(current_acos) and current_acos > max_product_acos:
-                    should_pause = True
-                    reason = f"ACOS {current_acos*100:.1f}% > Threshold {max_product_acos*100:.1f}%"
-                    if pd.isna(sales) or sales == 0:
-                        reason += " (Hypothetischer ACOS)"
-                
+
+                try:
+                    clicks_val = float(clicks) if pd.notna(clicks) else 0.0
+                except (ValueError, TypeError):
+                    clicks_val = 0.0
+
+                should_pause = False
+                reason = ""
+                has_enough_clicks = clicks_val >= max_clicks_no_conversion
+
+                if has_enough_clicks:
+                    if pd.notna(current_acos) and current_acos > max_product_acos:
+                        should_pause = True
+                        reason = f"ACOS {current_acos*100:.1f}% > Threshold {max_product_acos*100:.1f}%"
+                        if pd.isna(sales) or sales == 0:
+                            reason += " (Hypothetischer ACOS)"
+                    elif pd.isna(orders) or float(orders) == 0:
+                        should_pause = True
+                        reason = f"{int(clicks_val)} Klicks ohne Conversion (>= {max_clicks_no_conversion})"
+
                 if should_pause:
                     products_to_pause.append({
-                        'sku': sku,
-                        'acos': current_acos * 100,
-                        'reason': reason
+                        'asin': asin,
+                        'clicks': clicks,
+                        'orders': orders if pd.notna(orders) else 0,
+                        'acos': current_acos * 100 if pd.notna(current_acos) else 0,
+                        'reason': reason,
+                        'campaign_id': campaign_id,
+                        'campaign_name': campaign_name,
                     })
         
         return {
@@ -140,9 +157,9 @@ class CampaignPauser:
         df_updated = df_campaign.copy()
         
         # Get thresholds from config
-        max_keyword_acos = config.get('keyword_acos', 20.0) / 100.0  # Convert to decimal
-        max_product_acos = config.get('product_acos', 20.0) / 100.0  # Convert to decimal
-        max_clicks_no_conversion = config.get('max_keyword_clicks', 50)
+        max_keyword_acos = config.get('keyword_acos', 35.0) / 100.0  # Convert to decimal
+        max_product_acos = config.get('product_acos', 35.0) / 100.0  # Convert to decimal
+        max_clicks_no_conversion = config.get('max_keyword_clicks', 30)
         
         # Debug: Show configuration being used
         st.info(f"🔧 **CampaignPauser verwendet:** Keyword ACOS: {max_keyword_acos*100:.1f}% | Produkt ACOS: {max_product_acos*100:.1f}% | Max Klicks: {max_clicks_no_conversion}")

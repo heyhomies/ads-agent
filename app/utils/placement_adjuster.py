@@ -130,6 +130,25 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
         _TARGET_MIN_TOP_BID = 0.80
         _MIN_BASE_CPC = _TARGET_MIN_TOP_BID / 10  # 0.08
 
+        # *** CHECK FOR ZERO CLICKS ACROSS ALL PLACEMENTS — must come first ***
+        if grp[clicks_col].sum() == 0:
+            recommendations.append({
+                'campaign_id': campaign_id,
+                'placement': 'Gesamt',
+                'clicks': 0,
+                'spend': 0.0,
+                'sales': 0.0,
+                'current_acos': None,
+                'is_total': True,
+                'special_rule': 'no_clicks_warning',
+                'current_adjust_pct': None,
+                'recommended_adjust_pct': None,
+                'cpc': None,
+                'base_cpc': None,
+                'base_cpc_total': None,
+            })
+            continue
+
         # *** CHECK FOR SPECIAL RULE: Top-Platzierung < 20 clicks ***
         top_placement = grp[grp['placement_key'] == 'top-platzierung']
         
@@ -164,13 +183,18 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
             # *** LOW BASE CPC BOOST (Special Rule path) ***
             _sr_spend = grp[spend_col].sum()
             _sr_sales = grp[sales_col].sum()
+            _sr_clicks = grp[clicks_col].sum()
             total_acos = (_sr_spend / _sr_sales * 100) if _sr_sales > 0 else None
             _sr_acos_fraction = (_sr_spend / _sr_sales) if _sr_sales > 0 else None
+            # Apply boost when: max bid at 900% < €0.80 AND (no ACOS yet OR ACOS is acceptable)
             low_base_cpc_boosted = False
-            if (base_cpc * 10 < _TARGET_MIN_TOP_BID
-                    and _sr_acos_fraction is not None
-                    and _sr_acos_fraction <= effective_target_acos):
-                base_cpc = max(base_cpc * 2, _MIN_BASE_CPC)
+            _acos_ok = (_sr_acos_fraction is None) or (_sr_acos_fraction <= effective_target_acos)
+            if base_cpc * 10 < _TARGET_MIN_TOP_BID and _acos_ok:
+                # Enforce €0.08 minimum only when clicks are too few to trust the Base CPC
+                if _sr_clicks < 20:
+                    base_cpc = round(max(base_cpc * 2, _MIN_BASE_CPC), 2)
+                else:
+                    base_cpc = round(base_cpc * 2, 2)
                 low_base_cpc_boosted = True
 
             # Process each placement with special rule
@@ -215,16 +239,22 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                         'actual_increase': actual_increase
                     })
                 else:
-                    # Other placements stay unchanged
+                    # Other placements: keep current percentage, but still apply placement-specific cap
+                    _sr_placement_lower = row[placement_col].lower()
+                    _sr_max_cap = 0.75 if 'rest der suche' in _sr_placement_lower else 1.50
+                    _sr_pct = current_pct
+                    _sr_bid = base_cpc * (1 + _sr_pct / 100)
+                    if _sr_bid > _sr_max_cap:
+                        _sr_pct = max(0, (_sr_max_cap / base_cpc - 1) * 100)
                     recommendations.append({
                         'campaign_id': campaign_id,
                         'placement': row[placement_col],
                         'current_adjust_pct': current_pct,
-                        'recommended_adjust_pct': current_pct,  # No change
+                        'recommended_adjust_pct': _sr_pct,
                         'cpc': base_cpc,
                         'base_cpc': base_cpc,
                         'clicks': row[clicks_col],
-                        'spend': row[spend_col], 
+                        'spend': row[spend_col],
                         'sales': row[sales_col],
                         'current_acos': (row[spend_col] / row[sales_col] * 100) if row[sales_col] > 0 else 0,
                         'is_total': False,
@@ -250,11 +280,29 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
             # Determine min RPC among available placements
             valid_rpc = grp['rpc'].replace([float('inf')], pd.NA).dropna()
             if valid_rpc.empty:
-                continue  # Skip campaign if no valid RPCs
+                # No clicks in any placement — add a warning record instead of silently skipping
+                recommendations.append({
+                    'campaign_id': campaign_id,
+                    'placement': 'Gesamt',
+                    'clicks': int(grp[clicks_col].sum()),
+                    'spend': round(float(grp[spend_col].sum()), 2),
+                    'sales': round(float(grp[sales_col].sum()), 2),
+                    'current_acos': None,
+                    'is_total': True,
+                    'special_rule': 'no_clicks_warning',
+                    'current_adjust_pct': None,
+                    'recommended_adjust_pct': None,
+                    'cpc': None,
+                    'base_cpc': None,
+                    'base_cpc_total': None,
+                })
+                continue
             min_rpc = valid_rpc.min()
-            
+
             # Base CPC calculation using adjusted sales (no minimum needed since we adjust sales to 1 Euro)
             base_cpc = min_rpc * effective_target_acos  # Basis CPC
+            base_cpc = round(max(base_cpc, 0.01), 2)  # Amazon minimum bid floor + full-cent rounding
+            base_cpc_original = base_cpc  # Store before any scaling or boost
             # Check if this was originally a zero sales campaign before adjustment
             original_sales = grp[sales_col].sum()
             is_zero_sales_campaign = (original_sales == 0)
@@ -298,20 +346,24 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 # Calculate integer multiplier for Base CPC (round up to ensure we stay under 900%)
                 integer_multiplier = int(max_recommended_pct / 900) + 1
                 scaling_factor = 900 / max_recommended_pct
-                # Scale up Base CPC by integer multiplier
-                base_cpc = base_cpc * integer_multiplier
+                # Scale up Base CPC by integer multiplier (round to full cents)
+                base_cpc = round(base_cpc * integer_multiplier, 2)
 
             # *** LOW BASE CPC BOOST (Normal path) ***
-            # If even at 900% the Top-of-Search bid would be below €0.80 AND ACOS is acceptable,
-            # double the Base CPC (minimum €0.08). Placement percentages are unchanged.
+            # If even at 900% the Top-of-Search bid would be below €0.80 AND
+            # (no ACOS yet OR ACOS is acceptable), double the Base CPC.
+            # €0.08 minimum floor only applies when total clicks < 20 (insufficient data).
             low_base_cpc_boosted = False
             _norm_spend = grp[spend_col].sum()
             _norm_sales_adj = grp['sales_adjusted'].sum()
+            _norm_clicks = grp[clicks_col].sum()
             _norm_acos = (_norm_spend / _norm_sales_adj) if _norm_sales_adj > 0 else None
-            if (base_cpc * 10 < _TARGET_MIN_TOP_BID
-                    and _norm_acos is not None
-                    and _norm_acos <= effective_target_acos):
-                base_cpc = max(base_cpc * 2, _MIN_BASE_CPC)
+            _acos_ok = (_norm_acos is None) or (_norm_acos <= effective_target_acos)
+            if base_cpc * 10 < _TARGET_MIN_TOP_BID and _acos_ok:
+                if _norm_clicks < 20:
+                    base_cpc = round(max(base_cpc * 2, _MIN_BASE_CPC), 2)
+                else:
+                    base_cpc = round(base_cpc * 2, 2)
                 low_base_cpc_boosted = True
 
             # Second pass: Apply scaling and create final recommendations
@@ -324,14 +376,15 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 else:
                     recommended_pct = placement_rec['recommended_pct']
 
-                # *** ADD €1.50 MAX BID CAPPING FOR NORMAL CAMPAIGNS ***
+                # *** MAX BID CAPPING: €0.75 for Rest der Suche, €1.50 for all others ***
+                _placement_label_lower = placement_rec['placement_label'].lower()
+                _max_bid_cap = 0.75 if 'rest der suche' in _placement_label_lower else 1.50
                 max_bid_original = base_cpc * (1 + recommended_pct / 100)
                 bid_capped = False
-                
-                if max_bid_original > 1.50:
-                    # Scale down percentage to hit €1.50 max bid
-                    recommended_pct = ((1.50 / base_cpc) - 1) * 100
-                    recommended_pct = max(0, recommended_pct)  # Don't go negative
+
+                if max_bid_original > _max_bid_cap:
+                    recommended_pct = ((_max_bid_cap / base_cpc) - 1) * 100
+                    recommended_pct = max(0, recommended_pct)
                     bid_capped = True
 
                 recommendations.append({
@@ -386,6 +439,7 @@ def compute_placement_adjustments(df_campaign: pd.DataFrame, target_acos: float 
                 'total_rpc': round(total_rpc, 4) if total_rpc is not None else None,
                 'target_cpc': round(target_cpc_campaign, 2) if target_cpc_campaign is not None else None,
                 'base_cpc_total': round(base_cpc_total, 2),
+                'base_cpc_original': round(base_cpc_original, 4),
                 'min_rpc_total': round(min_rpc, 4),
                 'is_total': True,
                 'is_zero_sales': is_zero_sales_campaign,

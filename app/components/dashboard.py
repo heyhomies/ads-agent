@@ -310,23 +310,18 @@ def render_keyword_changes_tab(keyword_perf):
                     key=_editor_key,
                 )
 
-                col_save, col_status = st.columns([1, 3])
-                with col_save:
-                    if st.button('Auswahl speichern', key='save_neg_kws'):
-                        selected_indices = edited.index[edited['Hinzufügen'] == True].tolist()
-                        neg_kws = []
-                        for i in selected_indices:
-                            row = candidates.iloc[i]
-                            neg_kws.append({
-                                'search_term': str(row['customer_search_term']),
-                                'campaign_id': str(row['kampagnen-id']),
-                                'ad_group_id': str(row['anzeigengruppen-id']) if 'anzeigengruppen-id' in candidates.columns else '',
-                            })
-                        st.session_state.confirmed_negative_keywords = neg_kws
-                with col_status:
-                    saved = st.session_state.get('confirmed_negative_keywords', [])
-                    if saved:
-                        st.success(f"✅ {len(saved)} Negative Keywords für Export gespeichert.")
+                # Auto-sync session state with current editor state on every render
+                _neg_kws_current = []
+                for i, edited_row in edited.iterrows():
+                    if edited_row['Hinzufügen']:
+                        cand_row = candidates.iloc[i]
+                        _neg_kws_current.append({
+                            'search_term': str(cand_row['customer_search_term']),
+                            'campaign_id': str(cand_row['kampagnen-id']),
+                            'ad_group_id': str(cand_row['anzeigengruppen-id']) if 'anzeigengruppen-id' in candidates.columns else '',
+                        })
+                st.session_state.confirmed_negative_keywords = _neg_kws_current
+                st.info(f"🚫 **{len(_neg_kws_current)} von {len(candidates)} Negativ-Kandidaten** für Export ausgewählt.")
 
 
 def render_bid_changes_tab(bid_changes):
@@ -546,6 +541,17 @@ def render_placement_adjustments_tab(initial_adjustments):
             
             st.markdown(f"### 📋 **{campaign_name}** (ID: {campaign_id})")
 
+            # *** CHECK FOR NO-CLICKS WARNING ***
+            no_clicks_warning = 'special_rule' in grp.columns and grp['special_rule'].eq('no_clicks_warning').any()
+            if no_clicks_warning:
+                st.error(
+                    "🚨 **KEINE KLICKS IN DIESER KAMPAGNE** — Trotz vorhandenem Gebot wurden keine Klicks registriert. "
+                    "Bitte überprüfe den Kampagnenaufbau (z.B. Budget, Targeting-Einschränkungen, Anzeigenstatus, "
+                    "negative Keywords, Produktverfügbarkeit). Es werden keine Gebotsempfehlungen ausgegeben."
+                )
+                st.markdown("---")
+                continue
+
             # *** CHECK FOR SPECIAL RULE AND DISPLAY INFORMATION ***
             special_rule_applied = grp['special_rule'].eq('low_top_clicks').any() if 'special_rule' in grp.columns else False
             
@@ -604,9 +610,15 @@ def render_placement_adjustments_tab(initial_adjustments):
             # Check if scaling was applied and show scaling info (only for normal campaigns)
             if not special_rule_applied and total_row is not None and total_row.get('scaling_applied', False):
                 integer_multiplier = total_row.get('integer_multiplier', 1)
-                st.warning(f"⚖️ **Skalierung angewendet**: Anpassungen überschritten 900%. "
-                          f"Basis-CPC wurde um {integer_multiplier}x erhöht, "
-                          f"Anpassungen proportional reduziert (max 900%).")
+                base_cpc_orig = total_row.get('base_cpc_original', None)
+                base_cpc_scaled = total_row.get('base_cpc_total', None)
+                orig_str = f" (ursprünglich €{base_cpc_orig:.4f} → nach Skalierung €{base_cpc_scaled:.2f})" if base_cpc_orig is not None and base_cpc_scaled is not None else ""
+                st.warning(
+                    f"⚖️ **Skalierung angewendet**: Eine Platzierung hatte eine rechnerische Anpassung von über 900% — "
+                    f"das liegt daran, dass der RPC einer Platzierung deutlich höher ist als der minimale RPC (z.B. 1 Klick mit Umsatz vs. viele Klicks ohne Umsatz). "
+                    f"Basis-CPC wurde daher um **{integer_multiplier}x** erhöht{orig_str}, "
+                    f"alle Anpassungen wurden proportional reduziert (max 900%). Das Ergebnis ist mathematisch identisch."
+                )
 
             # Low Base CPC Boost notice (normal campaigns)
             if not special_rule_applied and total_row is not None and total_row.get('low_base_cpc_boosted', False):
@@ -874,24 +886,54 @@ def render_products_tab():
             st.metric("Hyp. ACOS", f"{camp_hypothetical}")
         
         # Prepare product table
-        display_cols = ['SKU', 'Ausgaben', 'Verkäufe', 'Klicks', 'Bestellungen', 'ACOS', 'Conversion-Rate']
-        
+        display_cols = ['ASIN', 'Ausgaben', 'Verkäufe', 'Klicks', 'Bestellungen', 'ACOS', 'Conversion-Rate']
+
         # Add hypothetical ACOS indicator
         campaign_products_display = campaign_products.copy()
-        
+
+        # Get thresholds for pause highlighting
+        _client_cfg = st.session_state.get('client_config', {})
+        _max_clicks = _client_cfg.get('max_keyword_clicks', 30)
+        _max_prod_acos = _client_cfg.get('product_acos', 35.0) / 100.0
+
+        # Compute pause mask on raw (unformatted) data
+        def _should_highlight(row):
+            clicks = row.get('Klicks', 0)
+            orders = row.get('Bestellungen', 0)
+            acos = row.get('ACOS', None)
+            try:
+                clicks = float(clicks) if pd.notna(clicks) else 0
+            except (ValueError, TypeError):
+                clicks = 0
+            if clicks < _max_clicks:
+                return False
+            if pd.notna(acos):
+                acos_dec = acos / 100.0 if float(acos) > 1 else float(acos)
+                if acos_dec > _max_prod_acos:
+                    return True
+            try:
+                orders_val = float(orders) if pd.notna(orders) else 0
+            except (ValueError, TypeError):
+                orders_val = 0
+            if orders_val == 0:
+                return True
+            return False
+
+        pause_mask = campaign_products_display.apply(_should_highlight, axis=1)
+
         # Create hypothetical ACOS indicator
         if 'hypothetical_acos_note' in campaign_products_display.columns:
             campaign_products_display['Hyp. ACOS'] = campaign_products_display['hypothetical_acos_note'].apply(
                 lambda x: "✅ Ja" if pd.notna(x) and 'Hypothetischer ACOS' in str(x) else "❌ Nein"
             )
             display_cols.append('Hyp. ACOS')
-        
+
         # Filter columns that exist
         existing_cols = [col for col in display_cols if col in campaign_products_display.columns]
-        
+
         if existing_cols:
             df_display = campaign_products_display[existing_cols].copy()
-            
+
             # Format ACOS column - this now includes hypothetical ACOS values
             if 'ACOS' in df_display.columns:
                 df_display['ACOS'] = df_display['ACOS'].apply(
@@ -903,19 +945,28 @@ def render_products_tab():
                 df_display['Conversion-Rate'] = df_display['Conversion-Rate'].apply(
                     lambda x: f"{x*100:.1f}%" if pd.notna(x) else "0.0%"
                 )
-            
+
             # Format monetary columns
             if 'Ausgaben' in df_display.columns:
                 df_display['Ausgaben'] = df_display['Ausgaben'].apply(
                     lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00"
                 )
-            
+
             if 'Verkäufe' in df_display.columns:
                 df_display['Verkäufe'] = df_display['Verkäufe'].apply(
                     lambda x: f"€{x:.2f}" if pd.notna(x) else "€0.00"
                 )
-            
-            st.dataframe(df_display, use_container_width=True)
+
+            # Apply red row highlighting for products exceeding pause thresholds
+            pause_mask_aligned = pause_mask.reindex(df_display.index, fill_value=False)
+
+            def _highlight_row(row):
+                if pause_mask_aligned.get(row.name, False):
+                    return ['color: red; font-weight: bold'] * len(row)
+                return [''] * len(row)
+
+            styled_df = df_display.style.apply(_highlight_row, axis=1)
+            st.dataframe(styled_df, use_container_width=True)
         
         # Show hypothetical ACOS details if any exist
         if camp_hypothetical > 0:
@@ -969,9 +1020,16 @@ def render_export_tab(optimization_results: Dict[str, Any]):
         st.markdown("### 🎯 **Spezialregel für wenig Traffic:**")
         st.markdown("• **Bedingung**: Top-Platzierung < 20 Klicks")
         st.markdown("• **Aktion**: Nur Top-Platzierung +100PP (andere bleiben unverändert)")
+        st.markdown("### ⬆️ **Low Base CPC Boost:**")
+        st.markdown("• **Bedingung**: Max-Gebot bei 900% < €0,80 UND (kein ACOS oder ACOS ≤ Ziel)")
+        st.markdown("• **Aktion**: Basis-CPC verdoppeln (€0,08-Mindest-Floor nur bei < 20 Klicks)")
+        st.markdown("### 🚨 **Kampagnen ohne Klicks:**")
+        st.markdown("• Kampagnen ohne Klicks in allen Platzierungen erhalten **keine** Gebotsempfehlungen")
+        st.markdown("• Es wird stattdessen ein roter Warnhinweis zur manuellen Prüfung angezeigt")
         st.markdown("### 💰 **Max-Gebot-Schutz für alle Kampagnen:**")
         st.markdown("• **Automatische Begrenzung**: Alle Max-Gebote werden auf €1,50 begrenzt")
         st.markdown("• **Skalierung**: Anpassungsprozentsatz wird runterskaliert wenn nötig")
+        st.markdown("• **Mindestgebot**: Basis-CPC immer mind. €0,01 (Amazon-Minimum), immer volle Cent")
         
         if 'placement_adjustments' in optimization_results:
             placements = optimization_results['placement_adjustments']
@@ -1128,91 +1186,107 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                 campaign_keywords_to_pause = []
         
         if campaign_keywords_to_pause:
-            st.warning(f"⏸️ **{len(campaign_keywords_to_pause)} Campaign Keywords** werden pausiert:")
-            
-            # Show keywords in a table
-            keywords_data = []
-            for kw in campaign_keywords_to_pause:
-                keyword = kw.get('keyword', 'Unbekannt')
-                clicks = kw.get('clicks', 0)
-                orders = kw.get('orders', 0)
-                acos = kw.get('acos', 0)
-                reason = kw.get('reason', 'Keine Angabe')
-                
-                # Format ACOS
-                if pd.notna(acos) and acos > 0:
-                    if acos <= 1:
-                        acos_display = f"{acos*100:.1f}%"
-                    else:
-                        acos_display = f"{acos:.1f}%"
-                else:
-                    acos_display = 'N/A'
-                
-                keywords_data.append({
-                    'Keyword': keyword,
-                    'Klicks': int(clicks) if pd.notna(clicks) else 'N/A',
-                    'Bestellungen': int(orders) if pd.notna(orders) else 'N/A',
-                    'ACOS': acos_display,
-                    'Grund': reason
-                })
-            
-            if keywords_data:
-                df_keywords = pd.DataFrame(keywords_data)
-                st.dataframe(df_keywords, use_container_width=True)
-                
+            st.warning(f"⏸️ **{len(campaign_keywords_to_pause)} Keywords** gefunden — bitte Auswahl treffen:")
+
+            kw_editor_data = pd.DataFrame({
+                'Pausieren': [True] * len(campaign_keywords_to_pause),
+                'Kampagne': [kw.get('campaign_name', str(kw.get('campaign_id', ''))) for kw in campaign_keywords_to_pause],
+                'Keyword': [kw.get('keyword', '') for kw in campaign_keywords_to_pause],
+                'Klicks': [int(float(kw.get('clicks', 0))) if pd.notna(kw.get('clicks')) else 0 for kw in campaign_keywords_to_pause],
+                'Bestellungen': [int(float(kw.get('orders', 0))) if pd.notna(kw.get('orders')) else 0 for kw in campaign_keywords_to_pause],
+                'ACOS': [f"{float(kw.get('acos', 0))*100:.1f}%" if pd.notna(kw.get('acos')) else 'N/A' for kw in campaign_keywords_to_pause],
+                'Grund': [kw.get('reason', '') for kw in campaign_keywords_to_pause],
+            })
+            _kw_editor_key = f"pause_kw_editor_{hash(str([(k.get('keyword'), k.get('campaign_id')) for k in campaign_keywords_to_pause]))}"
+            edited_kw = st.data_editor(
+                kw_editor_data,
+                column_config={'Pausieren': st.column_config.CheckboxColumn('Pausieren', default=True)},
+                use_container_width=True,
+                hide_index=True,
+                key=_kw_editor_key,
+            )
+            confirmed_kw_count = int(edited_kw['Pausieren'].sum())
+            if st.button(f"✅ Auswahl speichern ({confirmed_kw_count} Keywords pausieren)", key="save_pause_kw"):
+                st.session_state['confirmed_pause_keywords'] = [
+                    campaign_keywords_to_pause[i]
+                    for i, pausieren in enumerate(edited_kw['Pausieren'])
+                    if pausieren
+                ]
+                st.success(f"✅ {len(st.session_state['confirmed_pause_keywords'])} Keywords zum Pausieren gespeichert.")
+
+            saved_kw = st.session_state.get('confirmed_pause_keywords')
+            if saved_kw is not None:
+                st.info(f"💾 Gespeichert: {len(saved_kw)} Keywords werden beim Export pausiert")
         else:
             st.success("✅ Keine Campaign Keywords müssen pausiert werden")
+            st.session_state['confirmed_pause_keywords'] = []
     
     with st.expander("🛍️ **Produkt-Pausierung**"):
-        st.markdown(f"**ACOS-Grenzwert**: >{product_acos}% (inkl. hypothetischer ACOS)")
-        st.markdown(f"📊 **Aktuelle Konfiguration**: Produkt ACOS Limit: {product_acos}%")
-        
-        # Check if we have campaign data to analyze products  
+        st.markdown(f"**Kriterien**: ≥{max_keyword_clicks} Klicks **und** (ACOS >{product_acos}% oder keine Conversion)")
+        st.markdown(f"📊 **Aktuelle Konfiguration**: Produkt ACOS Limit: {product_acos}% | Max Klicks: {max_keyword_clicks}")
+
+        products_to_pause = []
         if 'df_campaign' in st.session_state and st.session_state.df_campaign is not None:
             from app.utils.campaign_pauser import CampaignPauser
-            
             df_campaign = st.session_state.df_campaign
             pauser = CampaignPauser()
-            
-            # Get preview of what products would be paused
             try:
                 preview_results = pauser.preview_pausing(df_campaign, client_config)
                 products_to_pause = preview_results.get('products_to_pause', [])
-                
-                if products_to_pause:
-                    st.warning(f"⏸️ **{len(products_to_pause)} Produkte** werden pausiert:")
-                    
-                    # Show products in a table
-                    products_data = []
-                    for prod in products_to_pause:
-                        products_data.append({
-                            'SKU': prod['sku'],
-                            'ACOS': f"{prod['acos']:.1f}%",
-                            'Grund': prod['reason']
-                        })
-                    
-                    if products_data:
-                        df_products = pd.DataFrame(products_data)
-                        st.dataframe(df_products, use_container_width=True)
-                else:
-                    st.success("✅ Keine Produkte müssen pausiert werden")
-                    
             except Exception as e:
-                st.info(f"ℹ️ Produktpausierung wird beim Export durchgeführt (Vorschau nicht verfügbar: {str(e)})")
+                st.info(f"ℹ️ Produkt-Vorschau nicht verfügbar: {str(e)}")
+
+        if products_to_pause:
+            st.warning(f"⏸️ **{len(products_to_pause)} Produkte** gefunden — bitte Auswahl treffen:")
+
+            prod_editor_data = pd.DataFrame({
+                'Pausieren': [True] * len(products_to_pause),
+                'Kampagne': [p.get('campaign_name', str(p.get('campaign_id', ''))) for p in products_to_pause],
+                'ASIN': [p.get('asin', '') for p in products_to_pause],
+                'Klicks': [int(float(p.get('clicks', 0))) if pd.notna(p.get('clicks')) else 0 for p in products_to_pause],
+                'Bestellungen': [int(float(p.get('orders', 0))) if pd.notna(p.get('orders')) else 0 for p in products_to_pause],
+                'ACOS': [f"{float(p.get('acos', 0)):.1f}%" for p in products_to_pause],
+                'Grund': [p.get('reason', '') for p in products_to_pause],
+            })
+            _prod_editor_key = f"pause_prod_editor_{hash(str([(p.get('asin'), p.get('campaign_id')) for p in products_to_pause]))}"
+            edited_prod = st.data_editor(
+                prod_editor_data,
+                column_config={'Pausieren': st.column_config.CheckboxColumn('Pausieren', default=True)},
+                use_container_width=True,
+                hide_index=True,
+                key=_prod_editor_key,
+            )
+            confirmed_prod_count = int(edited_prod['Pausieren'].sum())
+            if st.button(f"✅ Auswahl speichern ({confirmed_prod_count} Produkte pausieren)", key="save_pause_prod"):
+                st.session_state['confirmed_pause_products'] = [
+                    products_to_pause[i]
+                    for i, pausieren in enumerate(edited_prod['Pausieren'])
+                    if pausieren
+                ]
+                st.success(f"✅ {len(st.session_state['confirmed_pause_products'])} Produkte zum Pausieren gespeichert.")
+
+            saved_prod = st.session_state.get('confirmed_pause_products')
+            if saved_prod is not None:
+                st.info(f"💾 Gespeichert: {len(saved_prod)} Produkte werden beim Export pausiert")
         else:
-            st.info("ℹ️ Produktpausierung wird beim Export durchgeführt")
+            st.success("✅ Keine Produkte müssen pausiert werden")
+            st.session_state['confirmed_pause_products'] = []
     
     st.markdown("### ⚠️ **Wichtige Hinweise:**")
     st.markdown("""
     - **Kampagnennamen werden aktualisiert** mit Optimierungsdatum (DDMMYY) und Ziel-ACOS
-    - **Keywords erhalten Basis-CPC ihrer Kampagne** - basierend auf Platzierungs-Optimierung
+    - **Keywords erhalten Basis-CPC ihrer Kampagne** — basierend auf Platzierungs-Optimierung
     - **Platzierungs-Anpassungen** werden für alle drei Placement-Typen optimiert
     - **Spezialregel**: Kampagnen mit <20 Klicks Top-Platzierung bekommen nur +100PP Top-Placement-Erhöhung
-    - **Max-Gebot-Schutz**: Automatische Begrenzung auf €1,50 für alle Kampagnen
-    - **Keywords/Produkte werden pausiert** basierend auf ODER-Logik aus Konfiguration
+    - **Low Base CPC Boost**: Basis-CPC wird verdoppelt wenn Max-Gebot bei 900% unter €0,80 liegt (und ACOS akzeptabel)
+    - **Max-Gebot-Schutz**: Automatische Begrenzung auf €1,50 (Top-Platzierung & Produktseite) bzw. €0,75 (Rest der Suche), Mindestgebot €0,01 (volle Cent)
+    - **Kampagnen ohne Klicks**: Keine Gebotsänderungen — manuelle Prüfung des Kampagnenaufbaus erforderlich
+    - **Keywords werden pausiert** bei ≥{max_keyword_clicks} Klicks + ACOS>{keyword_acos}% oder keine Conversion
+    - **Produkte werden pausiert** bei ≥{max_keyword_clicks} Klicks + ACOS>{product_acos}% oder keine Conversion
+    - **Negative Keywords** aus der Suchbegriff-Analyse werden auf Wunsch als neue Zeilen eingefügt
     - **Alle anderen Sheets** bleiben unverändert erhalten
-    - **Original-Datei** wird nicht überschrieben - eine neue Datei wird erstellt
-    """)
+    - **Original-Datei** wird nicht überschrieben — eine neue Datei wird erstellt
+    """.format(max_keyword_clicks=max_keyword_clicks, keyword_acos=keyword_acos, product_acos=product_acos))
     
     # Export functionality
     st.markdown("---")
@@ -1267,18 +1341,10 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                         # Keep totals for Base CPC extraction in export, but filter for display purposes if needed
                         # The export function needs the totals rows to extract base_cpc_total values
                     
-                    # Debug: Show what config is being passed to export
-                    st.info(f"🔧 **Übergabe an Export:** {client_config}")
-                    
-                    # Debug: Show placement changes structure
-                    total_changes = [p for p in placement_changes_filtered if p.get('is_total', False)]
-                    st.info(f"🔍 **Placement Changes Debug:** Total records: {len(placement_changes_filtered)}, Total rows with base_cpc_total: {len(total_changes)}")
-                    if total_changes:
-                        for total in total_changes:
-                            st.info(f"   📊 Campaign {total.get('campaign_id')}: base_cpc_total = €{total.get('base_cpc_total', 'N/A')}")
-                    
-                    # Confirmed negative keywords from Keyword-Änderungen tab
+                    # Confirmed selections from Export tab
                     confirmed_neg_kws = st.session_state.get('confirmed_negative_keywords', [])
+                    confirmed_pause_kws = st.session_state.get('confirmed_pause_keywords')
+                    confirmed_pause_prods = st.session_state.get('confirmed_pause_products')
 
                     # Generate export file
                     export_buffer = generate_export_excel(
@@ -1292,6 +1358,8 @@ def render_export_tab(optimization_results: Dict[str, Any]):
                         placement_changes=placement_changes_filtered,
                         client_config=client_config,
                         negative_keywords=confirmed_neg_kws,
+                        pause_keywords=confirmed_pause_kws,
+                        pause_products=confirmed_pause_prods,
                     )
                     
                     if export_buffer:

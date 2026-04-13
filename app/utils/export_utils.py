@@ -13,7 +13,9 @@ def generate_export_excel(original_excel_path: str,
                           all_original_sheet_names: list = None,
                           placement_changes: list = None,
                           client_config: dict = None,
-                          negative_keywords: list = None):
+                          negative_keywords: list = None,
+                          pause_keywords: list = None,
+                          pause_products: list = None):
     """
     Generates an Excel file in memory with placement adjustments and Base CPC updates.
     
@@ -380,20 +382,57 @@ def generate_export_excel(original_excel_path: str,
                         st.info(f"📊 **Campaign Name Updates:** {campaign_name_updates} Kampagnennamen aktualisiert")
 
         # ------------------- Apply Campaign Pausing Logic ----------------------------
-        # Pause keywords and products based on ACOS thresholds
         paused_keywords_count = 0
         paused_products_count = 0
-        
-        if client_config:
+
+        if pause_keywords is not None or pause_products is not None:
+            # Use user-confirmed pauses from the Export tab UI
             try:
-                st.info("🔍 Checking for keywords and products to pause based on thresholds...")
-                st.info(f"🔧 **Export verwendet Konfiguration:** {client_config}")
+                entity_col = next((c for c in ['Entität', 'entität'] if c in df_to_update.columns), None)
+                campaign_id_col = next((c for c in ['Kampagnen-ID', 'kampagnen-id'] if c in df_to_update.columns), None)
+                kw_text_col = next((c for c in ['Keyword-Text', 'keyword-text'] if c in df_to_update.columns), None)
+                asin_col = next((c for c in ['ASIN', 'asin'] if c in df_to_update.columns), None)
+
+                if entity_col and campaign_id_col:
+                    for item in (pause_keywords or []):
+                        cid = str(item.get('campaign_id', ''))
+                        kw = str(item.get('keyword', ''))
+                        if not cid or not kw or not kw_text_col:
+                            continue
+                        mask = (
+                            (df_to_update[entity_col].astype(str).str.lower() == 'keyword') &
+                            (df_to_update[campaign_id_col].astype(str) == cid) &
+                            (df_to_update[kw_text_col].astype(str) == kw)
+                        )
+                        if mask.any():
+                            df_to_update.loc[mask, 'Operation'] = 'Update'
+                            df_to_update.loc[mask, 'Zustand'] = 'Angehalten'
+                            paused_keywords_count += int(mask.sum())
+
+                    for item in (pause_products or []):
+                        cid = str(item.get('campaign_id', ''))
+                        asin = str(item.get('asin', ''))
+                        if not cid or not asin or not asin_col:
+                            continue
+                        mask = (
+                            (df_to_update[entity_col].astype(str).str.lower() == 'produktanzeige') &
+                            (df_to_update[campaign_id_col].astype(str) == cid) &
+                            (df_to_update[asin_col].astype(str) == asin)
+                        )
+                        if mask.any():
+                            df_to_update.loc[mask, 'Operation'] = 'Update'
+                            df_to_update.loc[mask, 'Zustand'] = 'Angehalten'
+                            paused_products_count += int(mask.sum())
+            except Exception as e:
+                st.warning(f"⚠️ Fehler beim Anwenden der bestätigten Pausierungen: {str(e)}")
+
+        elif client_config:
+            # Fallback: automatic pausing when UI hasn't been used yet
+            try:
                 pauser = CampaignPauser()
                 df_to_update, pause_summary = pauser.process_campaign_sheet(df_to_update, client_config)
-                
                 paused_keywords_count = pause_summary.get('keywords_paused', 0)
                 paused_products_count = pause_summary.get('products_paused', 0)
-                
             except Exception as e:
                 st.warning(f"⚠️ Fehler beim Pausieren von Kampagnen-Elementen: {str(e)}")
 
